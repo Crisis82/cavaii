@@ -1,15 +1,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use cavaii_common::config::{ColorOrientation, RgbaColor, VisualizerType};
 use gtk::gdk;
-use gtk::gsk;
-use gtk::graphene;
 use gtk::glib;
+use gtk::graphene;
+use gtk::gsk;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use cavaii_common::config::{ColorOrientation, RgbaColor, VisualizerType};
 
-use super::{BarLayoutCache, downsample_wave_values};
+use super::{BarLayoutCache, downsample_wave_values, wave_stroke_padding};
 
 mod imp {
     use super::*;
@@ -89,8 +89,16 @@ mod imp {
             if visualizer_type == VisualizerType::Wave {
                 let width_f = width as f32;
                 let height_f = height as f32;
-                let mid_y = height_f * 0.5;
-                let amplitude = height_f * 0.45;
+                let stroke_padding = (wave_stroke_padding(wave_thickness) as f32)
+                    .min((height_f * 0.5 - 1.0).max(0.0));
+                let min_y = stroke_padding;
+                let max_y = (height_f - stroke_padding).max(min_y);
+                let mid_y = (min_y + max_y) * 0.5;
+                let amplitude = ((max_y - min_y) * 0.5).max(1.0);
+                let control_padding =
+                    ((wave_thickness.max(1.0) as f32) * 0.5).min((height_f * 0.5 - 1.0).max(0.0));
+                let control_min_y = control_padding;
+                let control_max_y = (height_f - control_padding).max(control_min_y);
                 let mut samples_scratch = self.wave_samples.borrow_mut();
                 let sampled = downsample_wave_values(&values, width, &mut samples_scratch);
                 let count = sampled.len();
@@ -134,9 +142,9 @@ mod imp {
                             points[idx + 1]
                         };
                         let c1x = p1x + (p2x - p0x) / 6.0;
-                        let c1y = p1y + (p2y - p0y) / 6.0;
+                        let c1y = (p1y + (p2y - p0y) / 6.0).clamp(control_min_y, control_max_y);
                         let c2x = p2x - (p3x - p1x) / 6.0;
-                        let c2y = p2y - (p3y - p1y) / 6.0;
+                        let c2y = (p2y - (p3y - p1y) / 6.0).clamp(control_min_y, control_max_y);
                         path_builder.cubic_to(c1x, c1y, c2x, c2y, p2x, p2y);
                     }
                 }
@@ -155,9 +163,10 @@ mod imp {
                     let gradient = gsk::LinearGradientNode::new(&bounds, &start, &end, &stops);
                     gsk::StrokeNode::new(&gradient, &path, &stroke)
                 } else {
-                    let color = gradient.first().cloned().unwrap_or_else(|| {
-                        gdk::RGBA::new(175.0 / 255.0, 198.0 / 255.0, 1.0, 0.7)
-                    });
+                    let color = gradient
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| gdk::RGBA::new(175.0 / 255.0, 198.0 / 255.0, 1.0, 0.7));
                     let color_node = gsk::ColorNode::new(&color, &bounds);
                     gsk::StrokeNode::new(&color_node, &path, &stroke)
                 };
@@ -170,15 +179,12 @@ mod imp {
                 let bar_height = (height_f * value.clamp(0.0, 1.0) as f32).max(1.0);
                 let x = layout.start_x + (index as f64 * layout.step);
                 let y = (height as f64) - bar_height as f64;
-                let rect = graphene::Rect::new(
-                    x as f32,
-                    y as f32,
-                    layout.scaled_width as f32,
-                    bar_height,
-                );
+                let rect =
+                    graphene::Rect::new(x as f32, y as f32, layout.scaled_width as f32, bar_height);
                 let center_x = x + (layout.scaled_width * 0.5);
                 let center_y = y + (bar_height as f64 * 0.5);
-                let gradient_t = gradient_position(center_x, center_y, width as f64, height as f64, orientation);
+                let gradient_t =
+                    gradient_position(center_x, center_y, width as f64, height as f64, orientation);
                 let base_color = gradient_color_at(&gradient, gradient_t);
                 let alpha = if fade {
                     let factor = edge_fade_factor(center_x, width as f64);
@@ -326,11 +332,7 @@ fn gradient_position(
     }
 }
 
-fn gradient_axis(
-    width: f32,
-    height: f32,
-    orientation: ColorOrientation,
-) -> (f32, f32, f32, f32) {
+fn gradient_axis(width: f32, height: f32, orientation: ColorOrientation) -> (f32, f32, f32, f32) {
     match orientation {
         ColorOrientation::Horizontal => (0.0, 0.0, width.max(1.0), 0.0),
         ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),

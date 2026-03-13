@@ -48,6 +48,7 @@ struct RuntimeConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 struct ConfigStamp {
+    path: PathBuf,
     exists: bool,
     modified_millis: u128,
     len: u64,
@@ -57,6 +58,7 @@ impl ConfigStamp {
     fn read(path: &Path) -> Self {
         let Ok(metadata) = std::fs::metadata(path) else {
             return Self {
+                path: path.to_path_buf(),
                 exists: false,
                 modified_millis: 0,
                 len: 0,
@@ -71,6 +73,7 @@ impl ConfigStamp {
             .unwrap_or(0);
 
         Self {
+            path: path.to_path_buf(),
             exists: true,
             modified_millis,
             len: metadata.len(),
@@ -85,7 +88,8 @@ struct PendingConfigReload {
 }
 
 pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
-    let mut runtime = load_runtime_config(&config_path).map_err(DaemonError::Config)?;
+    let mut active_config_path = resolved_config_path_or_input(&config_path);
+    let mut runtime = load_runtime_config(&active_config_path).map_err(DaemonError::Config)?;
     if !runtime.daemon.enabled {
         info!("cavaii-daemon: disabled in config ([daemon].enabled=false), exiting");
         return Ok(());
@@ -101,7 +105,7 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
         );
     }
 
-    let mut config_stamp = ConfigStamp::read(&config_path);
+    let mut config_stamp = ConfigStamp::read(&active_config_path);
     let mut pending_config_reload: Option<PendingConfigReload> = None;
     let mut stream = LiveFrameStream::spawn(runtime.visualizer.clone());
     info!("audio source: {:?}", stream.source_kind());
@@ -127,7 +131,8 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
             );
         }
 
-        let next_config_stamp = ConfigStamp::read(&config_path);
+        let next_config_path = resolved_config_path_or_input(&config_path);
+        let next_config_stamp = ConfigStamp::read(&next_config_path);
         if next_config_stamp == config_stamp {
             pending_config_reload = None;
         } else {
@@ -154,7 +159,8 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
                 continue;
             };
             config_stamp = pending.stamp;
-            match load_runtime_config(&config_path) {
+            active_config_path = config_stamp.path.clone();
+            match load_runtime_config(&active_config_path) {
                 Ok(next_runtime) => {
                     if runtime != next_runtime {
                         info!("cavaii-daemon: config changed, reloading daemon settings");
@@ -206,8 +212,7 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
         }
 
         let peak = stream.latest_frame().peak;
-        let mut instantaneous_active =
-            process_allowed && peak >= runtime.daemon.activity_threshold;
+        let mut instantaneous_active = process_allowed && peak >= runtime.daemon.activity_threshold;
         if !instantaneous_active
             && activity.state() == ActivityState::Active
             && inactivity_grace_until.is_some_and(|until| now < until)
@@ -254,9 +259,7 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
 }
 
 fn load_runtime_config(config_path: &Path) -> Result<RuntimeConfig, config::ConfigLoadError> {
-    let resolved_config_path =
-        resolve_runtime_config_path(config_path).unwrap_or_else(|| config_path.to_path_buf());
-    let app_config = config::load_or_default(&resolved_config_path)?;
+    let app_config = config::load_or_default(config_path)?;
     Ok(RuntimeConfig {
         visualizer: app_config.visualizer,
         daemon: app_config.daemon,
@@ -311,8 +314,13 @@ fn resolve_runtime_config_path(path: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(path).ok()
 }
 
+fn resolved_config_path_or_input(path: &Path) -> PathBuf {
+    resolve_runtime_config_path(path).unwrap_or_else(|| path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use cavaii_common::config::{DaemonConfig, VisualizerBackend, VisualizerConfig};
@@ -384,11 +392,13 @@ mod tests {
     #[test]
     fn debounce_keeps_latest_ready_at_when_stamp_changes() {
         let first = ConfigStamp {
+            path: PathBuf::from("/tmp/first.toml"),
             exists: true,
             modified_millis: 1,
             len: 10,
         };
         let second = ConfigStamp {
+            path: PathBuf::from("/tmp/second.toml"),
             exists: true,
             modified_millis: 2,
             len: 10,

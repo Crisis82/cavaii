@@ -1,7 +1,7 @@
+use cavaii_common::config::{AppConfig, OverlayConfig, OverlayLayer};
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use cavaii_common::config::{AppConfig, OverlayConfig, OverlayLayer};
 use tracing::warn;
 
 pub fn selected_monitors(_overlay: &OverlayConfig) -> Vec<gdk::Monitor> {
@@ -27,7 +27,7 @@ pub fn apply_default_size(
 ) {
     let overlay = &config.overlay;
     let width = overlay.width.max(1).min(i32::MAX as u32) as i32;
-    let height = overlay.height.max(1).min(i32::MAX as u32) as i32;
+    let height = super::overlay_draw_height(config);
     window.set_default_size(width, height);
 }
 
@@ -59,5 +59,8 @@ pub fn configure_layer_shell(
     }
 
     window.set_anchor(Edge::Bottom, true);
-    window.set_margin(Edge::Bottom, overlay.anchor_margin.min(i32::MAX as u32) as i32);
+    window.set_margin(
+        Edge::Bottom,
+        overlay.anchor_margin.min(i32::MAX as u32) as i32,
+    );
 }

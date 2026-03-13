@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use gtk::glib;
-use gtk::prelude::*;
 use cavaii_common::config::{self, AppConfig};
 use cavaii_common::notify::notify_error_with_cooldown;
+use gtk::glib;
+use gtk::prelude::*;
 use tracing::{info, warn};
 
 const APP_ID: &str = "io.cavaii.overlay";
@@ -84,15 +84,19 @@ struct PendingReload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ConfigFilesStamp {
+    config_path: PathBuf,
+    colors_path: PathBuf,
     config: ConfigStamp,
     colors: ConfigStamp,
 }
 
 impl ConfigFilesStamp {
     fn read(config_path: &Path) -> Self {
-        let colors_path = config::default_colors_path(config_path);
+        let (_, active_config_path, colors_path) = resolve_runtime_file_paths(config_path);
         Self {
-            config: ConfigStamp::read(config_path),
+            config_path: active_config_path.clone(),
+            colors_path: colors_path.clone(),
+            config: ConfigStamp::read(&active_config_path),
             colors: ConfigStamp::read(&colors_path),
         }
     }
@@ -266,12 +270,11 @@ fn audio_stream_config_changed(current: &AppConfig, next: &AppConfig) -> bool {
 }
 
 fn load_runtime_config(config_path: &Path) -> Result<RuntimeConfig, config::ConfigLoadError> {
-    let config_exists = config_path.exists();
-    let resolved_config_path = resolve_runtime_config_path(config_path);
-    let config_load_path = resolved_config_path.as_deref().unwrap_or(config_path);
-    let colors_path = config::default_colors_path(config_load_path);
+    let (resolved_config_path, config_load_path, colors_path) =
+        resolve_runtime_file_paths(config_path);
+    let config_exists = config_load_path.exists();
     let colors_exists = colors_path.exists();
-    let mut config = config::load_or_default(config_load_path)?;
+    let mut config = config::load_or_default(&config_load_path)?;
     match config::load_color_overrides(&colors_path) {
         Ok(overrides) => config::apply_color_overrides(&mut config, overrides),
         Err(err) => {
@@ -297,4 +300,13 @@ fn load_runtime_config(config_path: &Path) -> Result<RuntimeConfig, config::Conf
 
 fn resolve_runtime_config_path(path: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(path).ok()
+}
+
+fn resolve_runtime_file_paths(config_path: &Path) -> (Option<PathBuf>, PathBuf, PathBuf) {
+    let resolved_config_path = resolve_runtime_config_path(config_path);
+    let active_config_path = resolved_config_path
+        .clone()
+        .unwrap_or_else(|| config_path.to_path_buf());
+    let colors_path = config::default_colors_path(&active_config_path);
+    (resolved_config_path, active_config_path, colors_path)
 }

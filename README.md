@@ -20,7 +20,8 @@ This produces `cavaii` (overlay) and `cavaii-daemon`.
 
 You can point to a custom config with `--config <path>` or `--config=/path/to/config.toml`.
 
-Default config path is `$XDG_CONFIG_HOME/cavaii/config.toml` or `~/.config/cavaii/config.toml`.
+Default config path precedence is:
+`$CAVAII_CONFIG` → `$XDG_CONFIG_HOME/cavaii/config.toml` → `~/.config/cavaii/config.toml` → `./cavaii.toml`.
 `colors.toml` lives next to the main config and overrides colors.
 
 ## Configuration

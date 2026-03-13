@@ -5,14 +5,14 @@ mod style;
 use std::cell::RefCell;
 use std::f64::consts::PI;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gtk::glib;
-use gtk::prelude::*;
 use cavaii_common::config::{
     AppConfig, ColorOrientation, RgbaColor, VisualizerConfig, VisualizerType,
 };
 use cavaii_engine::live::LiveFrameStream;
+use gtk::glib;
+use gtk::prelude::*;
 use tracing::{error, info};
 
 use crate::ui::gpu_widget::BarsWidget;
@@ -86,10 +86,7 @@ fn build_cpu_area(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> gtk:
     let drawing_area = gtk::DrawingArea::new();
     drawing_area.set_widget_name("cavaii-bars");
     drawing_area.set_can_target(false);
-    drawing_area.set_size_request(
-        to_i32(config.overlay.width),
-        to_i32(config.overlay.height),
-    );
+    drawing_area.set_size_request(to_i32(config.overlay.width), overlay_draw_height(config));
 
     let bar_width = f64::from(config.visualizer.bar_width.max(1));
     let bar_corner_radius = f64::from(config.visualizer.bar_corner_radius.max(0.0));
@@ -178,10 +175,7 @@ fn build_gpu_widget(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> Ba
     );
     widget.set_widget_name("cavaii-bars");
     widget.set_can_target(false);
-    widget.set_size_request(
-        to_i32(config.overlay.width),
-        to_i32(config.overlay.height),
-    );
+    widget.set_size_request(to_i32(config.overlay.width), overlay_draw_height(config));
     widget
 }
 
@@ -192,17 +186,18 @@ fn attach_frame_tick(
     render_target: RenderTarget,
 ) {
     const BAR_REDRAW_DELTA_THRESHOLD: f64 = 0.003;
-    const WAVE_REDRAW_DELTA_THRESHOLD: f64 = 0.0008;
-    const WAVE_INTERPOLATION_ALPHA: f64 = 0.4;
-    const WAVE_SNAP_EPSILON: f64 = 0.0002;
 
     let is_wave = config.visualizer.visualizer_type == VisualizerType::Wave;
-    let fps = config.visualizer.framerate.max(1);
-    let interval_ms = (1000_u64 / u64::from(fps)).max(1);
+    let fps = f64::from(config.visualizer.framerate.max(1));
+    let interval = Duration::from_secs_f64((1.0 / fps).max(0.001));
+    let fallback_source_span_millis = (1000.0 / fps).max(1.0);
     let mut last_frame_timestamp = None;
-    let mut target_values = Vec::<f64>::new();
+    let mut wave_previous_values = Vec::<f64>::new();
+    let mut wave_current_values = Vec::<f64>::new();
+    let mut wave_previous_timestamp = None::<u64>;
+    let mut wave_current_timestamp = None::<u64>;
 
-    glib::timeout_add_local(Duration::from_millis(interval_ms), move || {
+    glib::timeout_add_local(interval, move || {
         if !render_target.is_alive() {
             return glib::ControlFlow::Break;
         }
@@ -214,42 +209,47 @@ fn attach_frame_tick(
         let mut should_redraw = false;
 
         if is_wave {
-            let mut targets_changed = false;
-            if target_values.len() != frame.bars.len() {
-                target_values.resize(frame.bars.len(), 0.0);
-                targets_changed = true;
-            }
-            for (slot, value) in target_values.iter_mut().zip(frame.bars.iter()) {
-                let next = f64::from(*value);
-                if (next - *slot).abs() > WAVE_SNAP_EPSILON {
-                    targets_changed = true;
+            if has_new_frame {
+                last_frame_timestamp = Some(frame_timestamp);
+
+                if wave_current_values.len() != frame.bars.len() {
+                    wave_previous_values.resize(frame.bars.len(), 0.0);
+                    wave_current_values.resize(frame.bars.len(), 0.0);
+                    wave_previous_timestamp = None;
+                    wave_current_timestamp = None;
                 }
-                *slot = next;
+
+                if let Some(previous_current_timestamp) = wave_current_timestamp {
+                    wave_previous_values.clone_from(&wave_current_values);
+                    wave_previous_timestamp = Some(previous_current_timestamp);
+                }
+
+                for (slot, value) in wave_current_values.iter_mut().zip(frame.bars.iter()) {
+                    *slot = f64::from(*value);
+                }
+                wave_current_timestamp = Some(frame_timestamp);
+
+                if wave_previous_timestamp.is_none() {
+                    wave_previous_values.clone_from(&wave_current_values);
+                    wave_previous_timestamp = Some(frame_timestamp);
+                }
             }
 
-            if !target_values.is_empty() {
+            if !wave_current_values.is_empty() {
                 let mut displayed = bar_values.borrow_mut();
-                if displayed.len() != target_values.len() {
-                    displayed.resize(target_values.len(), 0.0);
+                if displayed.len() != wave_current_values.len() {
+                    displayed.resize(wave_current_values.len(), 0.0);
                 }
 
-                let mut max_step = 0.0_f64;
-                for (slot, target) in displayed.iter_mut().zip(target_values.iter()) {
-                    let delta = *target - *slot;
-                    if delta.abs() <= WAVE_SNAP_EPSILON {
-                        *slot = *target;
-                        continue;
-                    }
-                    let step = delta * WAVE_INTERPOLATION_ALPHA;
-                    *slot += step;
-                    if step.abs() > max_step {
-                        max_step = step.abs();
-                    }
-                }
-                should_redraw = targets_changed || max_step >= WAVE_REDRAW_DELTA_THRESHOLD;
-            }
-
-            if should_redraw {
+                interpolate_wave_values(
+                    &wave_previous_values,
+                    &wave_current_values,
+                    wave_previous_timestamp,
+                    wave_current_timestamp,
+                    now_millis(),
+                    fallback_source_span_millis,
+                    &mut displayed,
+                );
                 render_target.queue();
             }
             return glib::ControlFlow::Continue;
@@ -360,6 +360,82 @@ fn to_i32(value: u32) -> i32 {
     value.max(1).min(i32::MAX as u32) as i32
 }
 
+pub(super) fn overlay_draw_height(config: &AppConfig) -> i32 {
+    let base_height = to_i32(config.overlay.height);
+    if config.visualizer.visualizer_type != VisualizerType::Wave {
+        return base_height;
+    }
+
+    let wave_padding =
+        wave_stroke_padding(f64::from(config.visualizer.wave_thickness.max(1))).ceil() as i32;
+    base_height.saturating_add(wave_padding.saturating_mul(2))
+}
+
+pub(super) fn wave_stroke_padding(wave_thickness: f64) -> f64 {
+    ((wave_thickness.max(1.0) * 0.5) + 2.0).max(1.0)
+}
+
+fn interpolate_wave_values(
+    previous: &[f64],
+    current: &[f64],
+    previous_timestamp: Option<u64>,
+    current_timestamp: Option<u64>,
+    render_timestamp: u64,
+    fallback_source_span_millis: f64,
+    output: &mut [f64],
+) {
+    let source_span_millis = wave_source_span_millis(
+        previous_timestamp,
+        current_timestamp,
+        fallback_source_span_millis,
+    );
+    let delayed_render_timestamp =
+        render_timestamp.saturating_sub(source_span_millis.round() as u64);
+    let interpolation_ratio = match (previous_timestamp, current_timestamp) {
+        (Some(previous_timestamp), Some(current_timestamp)) => wave_interpolation_ratio(
+            previous_timestamp,
+            current_timestamp,
+            delayed_render_timestamp,
+            source_span_millis,
+        ),
+        _ => 1.0,
+    };
+
+    for (index, slot) in output.iter_mut().enumerate() {
+        let target = current.get(index).copied().unwrap_or(0.0);
+        let start = previous.get(index).copied().unwrap_or(target);
+        *slot = start + ((target - start) * interpolation_ratio);
+    }
+}
+
+fn wave_source_span_millis(
+    previous_timestamp: Option<u64>,
+    current_timestamp: Option<u64>,
+    fallback_source_span_millis: f64,
+) -> f64 {
+    match (previous_timestamp, current_timestamp) {
+        (Some(previous_timestamp), Some(current_timestamp))
+            if current_timestamp > previous_timestamp =>
+        {
+            (current_timestamp - previous_timestamp) as f64
+        }
+        _ => fallback_source_span_millis.max(1.0),
+    }
+}
+
+fn wave_interpolation_ratio(
+    previous_timestamp: u64,
+    current_timestamp: u64,
+    render_timestamp: u64,
+    source_span_millis: f64,
+) -> f64 {
+    if current_timestamp <= previous_timestamp {
+        return 1.0;
+    }
+    let elapsed = render_timestamp.saturating_sub(previous_timestamp) as f64;
+    (elapsed / source_span_millis.max(1.0)).clamp(0.0, 1.0)
+}
+
 fn append_rounded_rect(
     ctx: &gtk::cairo::Context,
     x: f64,
@@ -439,11 +515,7 @@ fn set_paint_source(
     let _ = ctx.set_source(&gradient_paint);
 }
 
-fn gradient_axis(
-    width: f64,
-    height: f64,
-    orientation: ColorOrientation,
-) -> (f64, f64, f64, f64) {
+fn gradient_axis(width: f64, height: f64, orientation: ColorOrientation) -> (f64, f64, f64, f64) {
     match orientation {
         ColorOrientation::Horizontal => (0.0, 0.0, width.max(1.0), 0.0),
         ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),
@@ -579,8 +651,14 @@ fn draw_wave_line(
 
     let width_f = f64::from(width);
     let height_f = f64::from(height);
-    let mid_y = height_f * 0.5;
-    let amplitude = height_f * 0.45;
+    let stroke_padding = wave_stroke_padding(line_width).min((height_f * 0.5 - 1.0).max(0.0));
+    let min_y = stroke_padding;
+    let max_y = (height_f - stroke_padding).max(min_y);
+    let mid_y = (min_y + max_y) * 0.5;
+    let amplitude = ((max_y - min_y) * 0.5).max(1.0);
+    let control_padding = (line_width.max(1.0) * 0.5).min((height_f * 0.5 - 1.0).max(0.0));
+    let control_min_y = control_padding;
+    let control_max_y = (height_f - control_padding).max(control_min_y);
     let count = values.len();
     let step = if count > 1 {
         width_f / (count as f64 - 1.0)
@@ -629,9 +707,66 @@ fn draw_wave_line(
             points[idx + 1]
         };
         let c1x = p1x + (p2x - p0x) / 6.0;
-        let c1y = p1y + (p2y - p0y) / 6.0;
+        let c1y = (p1y + (p2y - p0y) / 6.0).clamp(control_min_y, control_max_y);
         let c2x = p2x - (p3x - p1x) / 6.0;
-        let c2y = p2y - (p3y - p1y) / 6.0;
+        let c2y = (p2y - (p3y - p1y) / 6.0).clamp(control_min_y, control_max_y);
         ctx.curve_to(c1x, c1y, c2x, c2y, p2x, p2y);
+    }
+}
+
+fn now_millis() -> u64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis().min(u64::MAX as u128) as u64,
+        Err(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{interpolate_wave_values, wave_source_span_millis};
+
+    #[test]
+    fn wave_span_uses_frame_delta_when_available() {
+        assert_eq!(
+            wave_source_span_millis(Some(1_000), Some(1_033), 16.0),
+            33.0
+        );
+    }
+
+    #[test]
+    fn wave_span_falls_back_when_delta_invalid() {
+        assert_eq!(wave_source_span_millis(Some(1_000), Some(999), 16.0), 16.0);
+        assert_eq!(wave_source_span_millis(None, Some(1_000), 20.0), 20.0);
+    }
+
+    #[test]
+    fn wave_interpolation_uses_one_frame_delay() {
+        let previous = [0.0_f64];
+        let current = [1.0_f64];
+        let mut output = [0.0_f64];
+
+        // At source frame arrival time, one-frame delay keeps us at the previous sample.
+        interpolate_wave_values(
+            &previous,
+            &current,
+            Some(1_000),
+            Some(1_016),
+            1_016,
+            16.0,
+            &mut output,
+        );
+        assert!((output[0] - 0.0).abs() < 1e-6);
+
+        // One source span later, interpolation reaches the new sample.
+        interpolate_wave_values(
+            &previous,
+            &current,
+            Some(1_000),
+            Some(1_016),
+            1_032,
+            16.0,
+            &mut output,
+        );
+        assert!((output[0] - 1.0).abs() < 1e-6);
     }
 }

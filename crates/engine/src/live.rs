@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, RwLock};
@@ -13,9 +13,13 @@ use tracing::{error, warn};
 
 use crate::pipeline::{DummySineSource, FrameSource};
 
-const CAVA_ATTACK: f32 = 0.8;
-const CAVA_DECAY: f32 = 0.84;
-const PIPEWIRE_RATE: u32 = 44_100;
+const CAVA_RAW_U16_MAX: f32 = u16::MAX as f32;
+const PIPEWIRE_RATE: u32 = 48_000;
+const PIPEWIRE_LATENCY_FRAMES: u32 = 256;
+const PIPEWIRE_STARTUP_MUTE_UPDATES: u32 = 8;
+const PIPEWIRE_SPIKE_MUTE_UPDATES: u32 = 8;
+const PIPEWIRE_SPIKE_DELTA_THRESHOLD: f32 = 0.72;
+const PIPEWIRE_SPIKE_ABSOLUTE_THRESHOLD: f32 = 0.94;
 
 #[derive(Debug, Clone, Copy)]
 struct PipewireTuning {
@@ -125,16 +129,14 @@ impl PipewireBarsScratch {
             // Handle first element (no left neighbor)
             let current = self.bars[0];
             let right = prev_original;
-            self.bars[0] =
-                (current * center_weight + right * tuning.neighbor_mix)
-                    / (center_weight + tuning.neighbor_mix);
+            self.bars[0] = (current * center_weight + right * tuning.neighbor_mix)
+                / (center_weight + tuning.neighbor_mix);
 
             // Handle last element (no right neighbor)
             let current = self.bars[last_idx];
             let left = self.bars[last_idx - 1];
-            self.bars[last_idx] =
-                (current * center_weight + left * tuning.neighbor_mix)
-                    / (center_weight + tuning.neighbor_mix);
+            self.bars[last_idx] = (current * center_weight + left * tuning.neighbor_mix)
+                / (center_weight + tuning.neighbor_mix);
         }
 
         for value in &mut self.bars {
@@ -243,7 +245,8 @@ impl LiveFrameStream {
 }
 
 fn spawn_dummy_thread(latest: Arc<RwLock<SpectrumFrame>>, bar_count: usize, framerate: u32) {
-    let frame_delay = Duration::from_millis((1000_u64 / u64::from(framerate)).max(1));
+    let fps = f64::from(framerate.max(1));
+    let frame_delay = Duration::from_secs_f64((1.0 / fps).max(0.001));
 
     thread::spawn(move || {
         let mut source = DummySineSource::new(bar_count);
@@ -273,7 +276,7 @@ fn spawn_pipewire_thread(
         .arg("--channels")
         .arg("2")
         .arg("--latency")
-        .arg("64")
+        .arg(PIPEWIRE_LATENCY_FRAMES.to_string())
         .arg("--media-category")
         .arg("Capture")
         .arg("--media-role")
@@ -310,6 +313,7 @@ fn spawn_pipewire_thread(
         let mut smoothed = vec![0.0_f32; bar_count];
         let mut scratch = PipewireBarsScratch::new(bar_count);
         let frame_stride = 2 * std::mem::size_of::<f32>();
+        let mut mute_updates_remaining = PIPEWIRE_STARTUP_MUTE_UPDATES;
 
         loop {
             let read = match reader.read(&mut read_buf) {
@@ -328,7 +332,20 @@ fn spawn_pipewire_thread(
             }
 
             let bars = scratch.compute(&pending[..usable], 2, tuning);
-            apply_decay_smoothing(&mut smoothed, &bars, tuning.attack, tuning.decay);
+
+            let previous_peak = peak_value(&smoothed);
+            let next_peak = peak_value(bars);
+            if looks_like_route_switch_spike(previous_peak, next_peak) {
+                mute_updates_remaining = PIPEWIRE_SPIKE_MUTE_UPDATES;
+            }
+
+            if mute_updates_remaining > 0 {
+                smoothed.fill(0.0);
+                mute_updates_remaining -= 1;
+            } else {
+                apply_decay_smoothing(&mut smoothed, &bars, tuning.attack, tuning.decay);
+            }
+
             let frame = SpectrumFrame::from_clamped(&smoothed, now_millis());
             if let Ok(mut target) = latest.write() {
                 *target = frame;
@@ -384,26 +401,50 @@ fn spawn_cava_thread(
         };
 
         let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        let mut smoothed = vec![0.0_f32; bar_count];
+        let mut read_buf = [0_u8; 8192];
+        let mut pending = Vec::<u8>::with_capacity(16384);
+        let frame_bytes = bar_count * std::mem::size_of::<u16>();
         let mut parsed = vec![0.0_f32; bar_count];
+
+        if frame_bytes == 0 {
+            let _ = fs::remove_file(&config_path);
+            let _ = child.kill();
+            return;
+        }
+
         loop {
-            line.clear();
-            match reader.read_line(&mut line) {
+            let read = match reader.read(&mut read_buf) {
                 Ok(0) => break,
-                Ok(_) => {
-                    if parse_cava_line_into(&line, &mut parsed) {
-                        apply_decay_smoothing(&mut smoothed, &parsed, CAVA_ATTACK, CAVA_DECAY);
-                        let frame = SpectrumFrame::from_clamped(&smoothed, now_millis());
-                        if let Ok(mut target) = latest.write() {
-                            *target = frame;
-                        }
-                    }
-                }
+                Ok(value) => value,
                 Err(err) => {
                     error!("cavaii: error reading cava output: {err}");
                     break;
                 }
+            };
+
+            pending.extend_from_slice(&read_buf[..read]);
+            let usable = pending.len() - (pending.len() % frame_bytes);
+            if usable < frame_bytes {
+                continue;
+            }
+
+            let mut offset = 0usize;
+            while offset + frame_bytes <= usable {
+                if parse_cava_raw_frame_into(&pending[offset..offset + frame_bytes], &mut parsed) {
+                    let frame = SpectrumFrame::from_clamped(&parsed, now_millis());
+                    if let Ok(mut target) = latest.write() {
+                        *target = frame;
+                    }
+                }
+                offset += frame_bytes;
+            }
+
+            if usable == pending.len() {
+                pending.clear();
+            } else {
+                let tail_len = pending.len() - usable;
+                pending.copy_within(usable.., 0);
+                pending.truncate(tail_len);
             }
         }
 
@@ -428,6 +469,27 @@ fn apply_decay_smoothing(smoothed: &mut [f32], input: &[f32], attack: f32, decay
     }
 }
 
+fn peak_value(values: &[f32]) -> f32 {
+    let mut peak = 0.0_f32;
+    for value in values {
+        let clamped = value.clamp(0.0, 1.0);
+        if clamped > peak {
+            peak = clamped;
+        }
+    }
+    peak
+}
+
+fn looks_like_route_switch_spike(previous_peak: f32, next_peak: f32) -> bool {
+    if !next_peak.is_finite() {
+        return true;
+    }
+    let previous_peak = previous_peak.clamp(0.0, 1.0);
+    let next_peak = next_peak.clamp(0.0, 1.0);
+    (next_peak - previous_peak) >= PIPEWIRE_SPIKE_DELTA_THRESHOLD
+        && next_peak >= PIPEWIRE_SPIKE_ABSOLUTE_THRESHOLD
+}
+
 fn write_cava_config(bar_count: usize, framerate: u32) -> std::io::Result<PathBuf> {
     let timestamp = now_millis();
     let path = env::temp_dir().join(format!(
@@ -447,10 +509,8 @@ source = auto
 [output]
 method = raw
 raw_target = /dev/stdout
-data_format = ascii
-ascii_max_range = 1000
-bar_delimiter = 59
-frame_delimiter = 10
+data_format = binary
+bit_format = 16bit
 "
     );
 
@@ -458,46 +518,14 @@ frame_delimiter = 10
     Ok(path)
 }
 
-#[cfg(test)]
-fn parse_cava_line(line: &str, expected_bars: usize) -> Option<Vec<f32>> {
-    let mut bars = vec![0.0_f32; expected_bars];
-    if parse_cava_line_into(line, &mut bars) {
-        Some(bars)
-    } else {
-        None
-    }
-}
-
-fn parse_cava_line_into(line: &str, output: &mut [f32]) -> bool {
-    if output.is_empty() {
+fn parse_cava_raw_frame_into(frame: &[u8], output: &mut [f32]) -> bool {
+    if output.is_empty() || frame.len() < output.len() * 2 {
         return false;
     }
 
-    let mut written = 0usize;
-    for token in line.trim().split(';') {
-        let trimmed = token.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let raw = match trimmed.parse::<f32>() {
-            Ok(value) => value,
-            Err(_) => return false,
-        };
-
-        if written < output.len() {
-            output[written] = (raw / 1000.0).clamp(0.0, 1.0);
-            written += 1;
-        } else {
-            break;
-        }
-    }
-
-    if written == 0 {
-        return false;
-    }
-
-    for slot in &mut output[written..] {
-        *slot = 0.0;
+    for (index, chunk) in frame.chunks_exact(2).take(output.len()).enumerate() {
+        let raw = u16::from_le_bytes([chunk[0], chunk[1]]);
+        output[index] = (raw as f32 / CAVA_RAW_U16_MAX).clamp(0.0, 1.0);
     }
     true
 }
@@ -511,18 +539,32 @@ fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{PipewireBarsScratch, PipewireTuning, parse_cava_line};
+    use super::{
+        PipewireBarsScratch, PipewireTuning, looks_like_route_switch_spike,
+        parse_cava_raw_frame_into,
+    };
 
     #[test]
-    fn parses_ascii_bar_line() {
-        let parsed = parse_cava_line("50;125;1000\n", 3);
-        assert_eq!(parsed, Some(vec![0.05, 0.125, 1.0]));
+    fn parses_cava_raw_u16_frame() {
+        let mut parsed = vec![0.0_f32; 3];
+        let frame = [
+            0_u16.to_le_bytes(),
+            32_768_u16.to_le_bytes(),
+            65_535_u16.to_le_bytes(),
+        ]
+        .concat();
+        assert!(parse_cava_raw_frame_into(&frame, &mut parsed));
+        assert_eq!(parsed[0], 0.0);
+        assert!((parsed[1] - 0.500_007_6).abs() < 1e-5);
+        assert_eq!(parsed[2], 1.0);
     }
 
     #[test]
-    fn pads_short_line_to_expected_count() {
-        let parsed = parse_cava_line("900;450\n", 4);
-        assert_eq!(parsed, Some(vec![0.9, 0.45, 0.0, 0.0]));
+    fn rejects_short_raw_frame() {
+        let mut parsed = vec![0.0_f32; 3];
+        let frame = [0_u8; 4];
+        assert!(!parse_cava_raw_frame_into(&frame, &mut parsed));
+        assert_eq!(parsed, vec![0.0, 0.0, 0.0]);
     }
 
     #[test]
@@ -546,5 +588,15 @@ mod tests {
         assert!(bars[0] > 0.0);
         assert!(bars[1] > 0.0);
         assert!(bars[1] >= bars[0]);
+    }
+
+    #[test]
+    fn detects_route_switch_spike() {
+        assert!(looks_like_route_switch_spike(0.02, 0.97));
+    }
+
+    #[test]
+    fn ignores_normal_peak_growth() {
+        assert!(!looks_like_route_switch_spike(0.20, 0.70));
     }
 }

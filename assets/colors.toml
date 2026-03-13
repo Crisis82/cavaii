@@ -1,4 +1,4 @@
 [color]
 orientation = "horizontal"
-fade = true
+fade = false
 gradient = ["#89b4faff"]

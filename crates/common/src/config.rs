@@ -518,8 +518,8 @@ fn parse_color_overrides(raw: &str) -> Result<VisualizerColorOverrides, ConfigLo
                 overrides.gradient = Some(gradient);
             }
             "orientation" => {
-                let orientation =
-                    ColorOrientation::parse(&value).map_err(|err| with_line_context(err, line_no))?;
+                let orientation = ColorOrientation::parse(&value)
+                    .map_err(|err| with_line_context(err, line_no))?;
                 overrides.orientation = Some(orientation);
             }
             "fade" => {
@@ -856,8 +856,8 @@ fn normalize_value(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, ColorOrientation, DaemonConfig, OverlayLayer, VisualizerBackend,
-        VisualizerType, apply_color_overrides, parse_color_overrides, parse_config,
+        AppConfig, ColorOrientation, DaemonConfig, OverlayLayer, VisualizerBackend, VisualizerType,
+        apply_color_overrides, parse_color_overrides, parse_config,
     };
 
     #[test]
@@ -913,7 +913,10 @@ mod tests {
         assert_eq!(parsed.visualizer.bar_width, 5);
         assert!((parsed.visualizer.bar_corner_radius - 6.0).abs() < 1e-5);
         assert_eq!(parsed.visualizer.wave_thickness, 4);
-        assert_eq!(parsed.visualizer.color_orientation, ColorOrientation::Vertical);
+        assert_eq!(
+            parsed.visualizer.color_orientation,
+            ColorOrientation::Vertical
+        );
         assert!(parsed.visualizer.color_fade);
         assert_eq!(parsed.visualizer.gap, 2);
         assert_eq!(parsed.visualizer.framerate, 75);
@@ -938,11 +941,7 @@ mod tests {
                 notify_cooldown_seconds: 30,
                 allowed_processes: vec!["spotify".to_owned(), "vlc".to_owned()],
                 overlay_command: "cargo".to_owned(),
-                overlay_args: vec![
-                    "run".to_owned(),
-                    "-p".to_owned(),
-                    "cavaii".to_owned()
-                ],
+                overlay_args: vec!["run".to_owned(), "-p".to_owned(), "cavaii".to_owned()],
             }
         );
     }
@@ -979,7 +978,10 @@ mod tests {
         assert!((config.visualizer.color_gradient[0].g - (198.0 / 255.0)).abs() < 1e-5);
         assert!((config.visualizer.color_gradient[0].b - 1.0).abs() < 1e-5);
         assert!((config.visualizer.color_gradient[0].a - 0.7).abs() < 1e-5);
-        assert_eq!(config.visualizer.color_orientation, ColorOrientation::Vertical);
+        assert_eq!(
+            config.visualizer.color_orientation,
+            ColorOrientation::Vertical
+        );
         assert!(config.visualizer.gpu);
 
         assert!(config.daemon.enabled);
@@ -1091,7 +1093,10 @@ mod tests {
         };
         apply_color_overrides(&mut config, overrides);
 
-        assert_eq!(config.visualizer.color_orientation, ColorOrientation::Horizontal);
+        assert_eq!(
+            config.visualizer.color_orientation,
+            ColorOrientation::Horizontal
+        );
         assert!(!config.visualizer.color_fade);
         assert_eq!(config.visualizer.color_gradient.len(), 2);
         assert!((config.visualizer.color_gradient[0].r - (202.0 / 255.0)).abs() < 1e-5);
