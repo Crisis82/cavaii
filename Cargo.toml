@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/common", "crates/daemon", "crates/engine", "crates/overlay"]
+default-members = ["crates/daemon", "crates/overlay"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-or-later"
+version = "0.1.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+expect_used = "deny"
+unwrap_used = "deny"

@@ -1,0 +1,13 @@
+[package]
+name = "cavaii-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cavaii-common = { path = "../common" }
+cavaii-engine = { path = "../engine" }
+tracing = "0.1"
+
+[lints]
+workspace = true

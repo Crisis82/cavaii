@@ -1,0 +1,12 @@
+name = "rose-pine"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(235, 111, 146, 0.7)",
+  "rgba(246, 193, 119, 0.7)",
+  "rgba(49, 116, 143, 0.7)",
+  "rgba(156, 207, 216, 0.7)",
+  "rgba(196, 167, 231, 0.7)",
+]

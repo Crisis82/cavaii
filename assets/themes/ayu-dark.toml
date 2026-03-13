@@ -1,0 +1,12 @@
+name = "ayu-dark"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(234, 108, 115, 0.7)",
+  "rgba(249, 175, 79, 0.7)",
+  "rgba(127, 217, 98, 0.7)",
+  "rgba(83, 189, 250, 0.7)",
+  "rgba(205, 161, 250, 0.7)",
+]

@@ -1,0 +1,15 @@
+[package]
+name = "cavaii"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.10", features = ["v4_14"] }
+gtk4-layer-shell = "0.6"
+cavaii-common = { path = "../common" }
+cavaii-engine = { path = "../engine" }
+tracing = "0.1"
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+name = "everforest"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(230, 126, 128, 0.7)",
+  "rgba(219, 188, 127, 0.7)",
+  "rgba(167, 192, 128, 0.7)",
+  "rgba(127, 187, 179, 0.7)",
+  "rgba(214, 153, 182, 0.7)",
+]

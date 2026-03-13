@@ -1,0 +1,12 @@
+name = "catppuccin-mocha"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(243, 139, 168, 0.7)",
+  "rgba(249, 226, 175, 0.7)",
+  "rgba(166, 227, 161, 0.7)",
+  "rgba(137, 180, 250, 0.7)",
+  "rgba(245, 194, 231, 0.7)",
+]

@@ -1,0 +1,12 @@
+name = "nord"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(191, 97, 106, 0.7)",
+  "rgba(235, 203, 139, 0.7)",
+  "rgba(163, 190, 140, 0.7)",
+  "rgba(129, 161, 193, 0.7)",
+  "rgba(180, 142, 173, 0.7)",
+]

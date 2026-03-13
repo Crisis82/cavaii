@@ -1,0 +1,12 @@
+name = "tokyo-night"
+
+[color]
+orientation = "vertical"
+fade = true
+gradient = [
+  "rgba(247, 118, 142, 0.7)",
+  "rgba(224, 175, 104, 0.7)",
+  "rgba(158, 206, 106, 0.7)",
+  "rgba(122, 162, 247, 0.7)",
+  "rgba(187, 154, 247, 0.7)",
+]

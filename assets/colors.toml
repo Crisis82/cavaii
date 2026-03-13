@@ -1,0 +1,4 @@
+[color]
+orientation = "horizontal"
+fade = true
+gradient = ["#89b4faff"]
