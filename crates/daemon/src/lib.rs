@@ -90,10 +90,6 @@ struct PendingConfigReload {
 pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
     let mut active_config_path = resolved_config_path_or_input(&config_path);
     let mut runtime = load_runtime_config(&active_config_path).map_err(DaemonError::Config)?;
-    if !runtime.daemon.enabled {
-        info!("cavaii-daemon: disabled in config ([daemon].enabled=false), exiting");
-        return Ok(());
-    }
 
     info!("cavaii-daemon starting");
     if config_path.exists() {
@@ -108,7 +104,6 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
     let mut config_stamp = ConfigStamp::read(&active_config_path);
     let mut pending_config_reload: Option<PendingConfigReload> = None;
     let mut stream = LiveFrameStream::spawn(runtime.visualizer.clone());
-    info!("audio source: {:?}", stream.source_kind());
     let mut inactivity_grace_until: Option<Instant> = None;
 
     let mut activity = ActivityTracker::new();
@@ -170,23 +165,9 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
                             now,
                             config_switch_grace_duration(&runtime.daemon, &next_runtime.daemon),
                         );
-                        if overlay_launch_changed(&runtime.daemon, &next_runtime.daemon) {
-                            info!(
-                                "cavaii-daemon: overlay launch settings changed, restarting overlay"
-                            );
-                            overlay.stop().map_err(DaemonError::Runtime)?;
-                        }
                         if audio_probe_config_changed(&runtime.visualizer, &next_runtime.visualizer)
                         {
                             stream = LiveFrameStream::spawn(next_runtime.visualizer.clone());
-                            info!("audio source: {:?}", stream.source_kind());
-                        }
-                        if !next_runtime.daemon.enabled {
-                            overlay.stop().map_err(DaemonError::Runtime)?;
-                            info!(
-                                "cavaii-daemon: disabled in config ([daemon].enabled=false), exiting"
-                            );
-                            return Ok(());
                         }
                         runtime = next_runtime;
                     }
@@ -238,7 +219,7 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
 
         match activity.state() {
             ActivityState::Active => {
-                if let Err(err) = overlay.ensure_running(&runtime.daemon, &config_path, now) {
+                if let Err(err) = overlay.ensure_running(&runtime.daemon, now) {
                     error!("cavaii-daemon: could not launch overlay: {err}");
                     notify_error_with_cooldown(
                         "daemon.overlay_launch_failed",
@@ -270,19 +251,10 @@ fn notify_cooldown(config: &DaemonConfig) -> Duration {
     Duration::from_secs(config.notify_cooldown_seconds)
 }
 
-fn overlay_launch_changed(current: &DaemonConfig, next: &DaemonConfig) -> bool {
-    current.overlay_command != next.overlay_command || current.overlay_args != next.overlay_args
-}
-
 fn audio_probe_config_changed(current: &VisualizerConfig, next: &VisualizerConfig) -> bool {
     current.backend != next.backend
-        || current.bars != next.bars
+        || current.points != next.points
         || current.framerate != next.framerate
-        || current.pipewire_attack != next.pipewire_attack
-        || current.pipewire_decay != next.pipewire_decay
-        || current.pipewire_gain != next.pipewire_gain
-        || current.pipewire_curve != next.pipewire_curve
-        || current.pipewire_neighbor_mix != next.pipewire_neighbor_mix
 }
 
 fn config_switch_grace_duration(current: &DaemonConfig, next: &DaemonConfig) -> Duration {
@@ -334,8 +306,8 @@ mod tests {
     fn ignores_purely_visual_visualizer_changes() {
         let current = VisualizerConfig::default();
         let mut next = current.clone();
-        next.bar_width = 42;
-        next.gap = 7;
+        next.point_width = 42;
+        next.point_gap = 7;
         next.color_gradient = vec![cavaii_common::config::RgbaColor::default()];
         next.gpu = false;
 
@@ -346,15 +318,15 @@ mod tests {
     fn detects_audio_probe_changes() {
         let current = VisualizerConfig::default();
         let mut next = current.clone();
-        next.backend = VisualizerBackend::Cava;
+        next.backend = VisualizerBackend::Dummy;
         assert!(audio_probe_config_changed(&current, &next));
 
         let mut next = current.clone();
-        next.bars += 8;
+        next.points += 8;
         assert!(audio_probe_config_changed(&current, &next));
 
         let mut next = current.clone();
-        next.pipewire_gain += 0.1;
+        next.framerate += 1;
         assert!(audio_probe_config_changed(&current, &next));
     }
 

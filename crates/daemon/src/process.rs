@@ -23,12 +23,7 @@ impl OverlayProcess {
         }
     }
 
-    pub fn ensure_running(
-        &mut self,
-        daemon: &DaemonConfig,
-        config_path: &Path,
-        now: Instant,
-    ) -> io::Result<()> {
+    pub fn ensure_running(&mut self, daemon: &DaemonConfig, now: Instant) -> io::Result<()> {
         if self.child.is_some() {
             return Ok(());
         }
@@ -40,16 +35,13 @@ impl OverlayProcess {
         }
 
         self.last_spawn_attempt = Some(now);
-        let mut command = build_command(daemon, config_path);
+        let mut command = build_command(daemon);
         let mut child = command.spawn()?;
         if let Some(stderr) = child.stderr.take() {
             spawn_overlay_stderr_forwarder(stderr);
         }
         self.child = Some(child);
-        info!(
-            "cavaii-daemon: started overlay process ({})",
-            daemon.overlay_command
-        );
+        info!("cavaii-daemon: started overlay process (cavaii)");
         Ok(())
     }
 
@@ -83,18 +75,8 @@ impl OverlayProcess {
     }
 }
 
-fn build_command(daemon: &DaemonConfig, config_path: &Path) -> Command {
-    let command_name = if daemon.overlay_command.trim().is_empty() {
-        "cavaii"
-    } else {
-        daemon.overlay_command.trim()
-    };
-
-    let mut command = Command::new(command_name);
-    if !daemon.overlay_args.is_empty() {
-        command.args(&daemon.overlay_args);
-    }
-    command.env("CAVAII_CONFIG", config_path);
+fn build_command(_daemon: &DaemonConfig) -> Command {
+    let mut command = Command::new("cavaii");
     command.env("CAVAII_DISABLE_NOTIFICATIONS", "1");
     command.stdin(Stdio::null());
     command.stderr(Stdio::piped());

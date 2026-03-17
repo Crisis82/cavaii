@@ -260,13 +260,8 @@ fn apply_config(app: &gtk::Application, state: &OverlayState, next_runtime: Runt
 
 fn audio_stream_config_changed(current: &AppConfig, next: &AppConfig) -> bool {
     current.visualizer.backend != next.visualizer.backend
-        || current.visualizer.bars != next.visualizer.bars
+        || current.visualizer.points != next.visualizer.points
         || current.visualizer.framerate != next.visualizer.framerate
-        || current.visualizer.pipewire_attack != next.visualizer.pipewire_attack
-        || current.visualizer.pipewire_decay != next.visualizer.pipewire_decay
-        || current.visualizer.pipewire_gain != next.visualizer.pipewire_gain
-        || current.visualizer.pipewire_curve != next.visualizer.pipewire_curve
-        || current.visualizer.pipewire_neighbor_mix != next.visualizer.pipewire_neighbor_mix
 }
 
 fn load_runtime_config(config_path: &Path) -> Result<RuntimeConfig, config::ConfigLoadError> {

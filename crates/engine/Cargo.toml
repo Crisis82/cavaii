@@ -8,5 +8,10 @@ license.workspace = true
 cavaii-common = { path = "../common" }
 tracing = "0.1"
 
+[[test]]
+name = "perf-benchmark"
+path = "tests/perf_benchmark.rs"
+harness = false
+
 [lints]
 workspace = true

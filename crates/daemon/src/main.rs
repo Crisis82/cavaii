@@ -1,17 +1,22 @@
-use std::path::PathBuf;
 use std::time::Duration;
 
-use cavaii_common::cli;
-use cavaii_common::config::DaemonConfig;
+use cavaii_common::config::{self, DaemonConfig};
 use cavaii_common::notify::notify_error_with_cooldown;
 
 fn main() {
-    let config_path = match resolve_cli_config_path() {
+    let config_path = match config::ensure_default_config_files() {
         Ok(path) => path,
-        Err(exit_code) => std::process::exit(exit_code),
+        Err(err) => {
+            eprintln!("cavaii-daemon: failed to initialize config files: {err}");
+            std::process::exit(1);
+        }
     };
 
-    if let Err(err) = cavaii_common::logging::init_logging("daemon") {
+    let logging_enabled = config::load_or_default(&config_path)
+        .map(|value| value.logging)
+        .unwrap_or(true);
+
+    if logging_enabled && let Err(err) = cavaii_common::logging::init_logging("cavaii-daemon") {
         eprintln!("cavaii-daemon logging init failed: {err}");
     }
 
@@ -27,24 +32,4 @@ fn main() {
         );
         std::process::exit(1);
     }
-}
-
-fn resolve_cli_config_path() -> Result<PathBuf, i32> {
-    let options = match cli::parse_standard_cli() {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("cavaii-daemon: {}", err.message());
-            eprintln!("{}", cli::usage("cavaii-daemon"));
-            return Err(2);
-        }
-    };
-
-    if options.show_help {
-        println!("{}", cli::usage("cavaii-daemon"));
-        return Err(0);
-    }
-
-    Ok(options
-        .config_path
-        .unwrap_or_else(cavaii_common::config::default_config_path))
 }

@@ -40,9 +40,9 @@ mod imp {
                 gap: RefCell::new(0.0),
                 corner_radius: RefCell::new(0.0),
                 wave_thickness: RefCell::new(1.0),
-                visualizer_type: RefCell::new(VisualizerType::Bar),
+                visualizer_type: RefCell::new(VisualizerType::Bars),
                 fade: RefCell::new(false),
-                orientation: RefCell::new(ColorOrientation::Vertical),
+                orientation: RefCell::new(ColorOrientation::Horizontal),
                 gradient: RefCell::new(vec![gdk::RGBA::new(
                     175.0 / 255.0,
                     198.0 / 255.0,
@@ -82,6 +82,7 @@ mod imp {
             let visualizer_type = *self.visualizer_type.borrow();
             let fade = *self.fade.borrow();
             let orientation = *self.orientation.borrow();
+            let effective_orientation = effective_fade_orientation(orientation, fade);
             let mut layout = self.layout.borrow_mut();
             let gradient = self.gradient.borrow();
             let height_f = height as f32;
@@ -157,7 +158,7 @@ mod imp {
                 let bounds = graphene::Rect::new(0.0, 0.0, width_f, height_f);
                 let stroke_node = if fade || gradient.len() > 1 {
                     let stops = build_gradient_stops(&gradient, fade);
-                    let (sx, sy, ex, ey) = gradient_axis(width_f, height_f, orientation);
+                    let (sx, sy, ex, ey) = gradient_axis(width_f, height_f, effective_orientation);
                     let start = graphene::Point::new(sx, sy);
                     let end = graphene::Point::new(ex, ey);
                     let gradient = gsk::LinearGradientNode::new(&bounds, &start, &end, &stops);
@@ -175,6 +176,37 @@ mod imp {
             }
 
             layout.update(width, values.len(), bar_width, gap);
+            if effective_orientation == ColorOrientation::Vertical {
+                let width_f = width as f32;
+                let height_f = height as f32;
+                let bounds = graphene::Rect::new(0.0, 0.0, width_f, height_f);
+                let stops = build_gradient_stops(&gradient, fade);
+                let (sx, sy, ex, ey) = gradient_axis(width_f, height_f, effective_orientation);
+                let start = graphene::Point::new(sx, sy);
+                let end = graphene::Point::new(ex, ey);
+                let gradient_node = gsk::LinearGradientNode::new(&bounds, &start, &end, &stops);
+                for (index, value) in values.iter().enumerate() {
+                    let bar_height = (height_f * value.clamp(0.0, 1.0) as f32).max(1.0);
+                    let x = layout.start_x + (index as f64 * layout.step);
+                    let y = (height as f64) - bar_height as f64;
+                    let rect = graphene::Rect::new(
+                        x as f32,
+                        y as f32,
+                        layout.scaled_width as f32,
+                        bar_height,
+                    );
+                    let radius = corner_radius
+                        .min(layout.scaled_width * 0.5)
+                        .min(bar_height as f64 * 0.5) as f32;
+                    let corner = graphene::Size::new(radius, radius);
+                    let rounded = gsk::RoundedRect::new(rect, corner, corner, corner, corner);
+                    snapshot.push_rounded_clip(&rounded);
+                    snapshot.append_node(&gradient_node);
+                    snapshot.pop();
+                }
+                return;
+            }
+
             for (index, value) in values.iter().enumerate() {
                 let bar_height = (height_f * value.clamp(0.0, 1.0) as f32).max(1.0);
                 let x = layout.start_x + (index as f64 * layout.step);
@@ -183,8 +215,13 @@ mod imp {
                     graphene::Rect::new(x as f32, y as f32, layout.scaled_width as f32, bar_height);
                 let center_x = x + (layout.scaled_width * 0.5);
                 let center_y = y + (bar_height as f64 * 0.5);
-                let gradient_t =
-                    gradient_position(center_x, center_y, width as f64, height as f64, orientation);
+                let gradient_t = gradient_position(
+                    center_x,
+                    center_y,
+                    width as f64,
+                    height as f64,
+                    effective_orientation,
+                );
                 let base_color = gradient_color_at(&gradient, gradient_t);
                 let alpha = if fade {
                     let factor = edge_fade_factor(center_x, width as f64);
@@ -251,6 +288,14 @@ impl BarsWidget {
                 .collect()
         };
         widget
+    }
+}
+
+fn effective_fade_orientation(orientation: ColorOrientation, fade: bool) -> ColorOrientation {
+    if fade {
+        ColorOrientation::Horizontal
+    } else {
+        orientation
     }
 }
 
@@ -328,14 +373,16 @@ fn gradient_position(
 ) -> f64 {
     match orientation {
         ColorOrientation::Horizontal => (x / width.max(1.0)).clamp(0.0, 1.0),
-        ColorOrientation::Vertical => ((height.max(1.0) - y) / height.max(1.0)).clamp(0.0, 1.0),
+        ColorOrientation::Height | ColorOrientation::Vertical => {
+            ((height.max(1.0) - y) / height.max(1.0)).clamp(0.0, 1.0)
+        }
     }
 }
 
 fn gradient_axis(width: f32, height: f32, orientation: ColorOrientation) -> (f32, f32, f32, f32) {
     match orientation {
         ColorOrientation::Horizontal => (0.0, 0.0, width.max(1.0), 0.0),
-        ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),
+        ColorOrientation::Height | ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),
     }
 }
 

@@ -4,29 +4,11 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OverlayLayer {
-    Background,
-    Bottom,
-    Top,
-}
-
-impl OverlayLayer {
-    fn parse(value: &str) -> Result<Self, ConfigLoadError> {
-        match value {
-            "background" => Ok(Self::Background),
-            "bottom" => Ok(Self::Bottom),
-            "top" => Ok(Self::Top),
-            _ => Err(ConfigLoadError::Parse(format!(
-                "unknown overlay.layer value: {value}"
-            ))),
-        }
-    }
-}
+const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../../../assets/config.toml");
+const DEFAULT_COLORS_TEMPLATE: &str = include_str!("../../../assets/colors.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlayConfig {
-    pub layer: OverlayLayer,
     pub anchor_margin: u32,
     pub width: u32,
     pub height: u32,
@@ -35,18 +17,15 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            layer: OverlayLayer::Background,
             anchor_margin: 10,
-            width: 1000,
-            height: 300,
+            width: 800,
+            height: 100,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VisualizerBackend {
-    Auto,
-    Pipewire,
     Cava,
     Dummy,
 }
@@ -54,8 +33,6 @@ pub enum VisualizerBackend {
 impl VisualizerBackend {
     fn parse(value: &str) -> Result<Self, ConfigLoadError> {
         match value {
-            "auto" => Ok(Self::Auto),
-            "pipewire" => Ok(Self::Pipewire),
             "cava" => Ok(Self::Cava),
             "dummy" => Ok(Self::Dummy),
             _ => Err(ConfigLoadError::Parse(format!(
@@ -174,14 +151,14 @@ impl Default for RgbaColor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisualizerType {
-    Bar,
+    Bars,
     Wave,
 }
 
 impl VisualizerType {
     fn parse(value: &str) -> Result<Self, ConfigLoadError> {
         match value {
-            "bar" => Ok(Self::Bar),
+            "bars" => Ok(Self::Bars),
             "wave" => Ok(Self::Wave),
             _ => Err(ConfigLoadError::Parse(format!(
                 "unknown visualizer.type value: {value}"
@@ -192,15 +169,17 @@ impl VisualizerType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorOrientation {
-    Vertical,
     Horizontal,
+    Height,
+    Vertical,
 }
 
 impl ColorOrientation {
     fn parse(value: &str) -> Result<Self, ConfigLoadError> {
         match value {
-            "vertical" => Ok(Self::Vertical),
             "horizontal" => Ok(Self::Horizontal),
+            "height" => Ok(Self::Height),
+            "vertical" => Ok(Self::Vertical),
             _ => Err(ConfigLoadError::Parse(format!(
                 "unknown color.orientation value: {value}"
             ))),
@@ -212,62 +191,101 @@ impl ColorOrientation {
 pub struct VisualizerConfig {
     pub backend: VisualizerBackend,
     pub visualizer_type: VisualizerType,
-    pub bars: usize,
-    pub bar_width: u32,
-    pub bar_corner_radius: f32,
-    pub wave_thickness: u32,
-    pub gap: u32,
+    pub points: usize,
+    pub point_width: u32,
+    pub point_gap: u32,
     pub framerate: u32,
     pub color_gradient: Vec<RgbaColor>,
     pub color_orientation: ColorOrientation,
     pub color_fade: bool,
     pub gpu: bool,
-    pub pipewire_attack: f32,
-    pub pipewire_decay: f32,
-    pub pipewire_gain: f32,
-    pub pipewire_curve: f32,
-    pub pipewire_neighbor_mix: f32,
 }
 
 impl Default for VisualizerConfig {
     fn default() -> Self {
         Self {
-            backend: VisualizerBackend::Pipewire,
-            visualizer_type: VisualizerType::Bar,
-            bars: 120,
-            bar_width: 12,
-            bar_corner_radius: 20.0,
-            wave_thickness: 2,
-            gap: 5,
-            framerate: 60,
+            backend: VisualizerBackend::Cava,
+            visualizer_type: VisualizerType::Bars,
+            points: 140,
+            point_width: 12,
+            point_gap: 4,
+            framerate: 30,
             color_gradient: vec![RgbaColor {
                 r: 175.0 / 255.0,
                 g: 198.0 / 255.0,
                 b: 1.0,
                 a: 0.7,
             }],
-            color_orientation: ColorOrientation::Vertical,
+            color_orientation: ColorOrientation::Horizontal,
             color_fade: true,
             gpu: true,
-            pipewire_attack: 0.14,
-            pipewire_decay: 0.975,
-            pipewire_gain: 1.20,
-            pipewire_curve: 0.95,
-            pipewire_neighbor_mix: 0.24,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarConfig {
+    pub points: usize,
+    pub point_width: u32,
+    pub point_gap: u32,
+    pub corner_radius: f32,
+}
+
+impl Default for BarConfig {
+    fn default() -> Self {
+        Self {
+            points: 140,
+            point_width: 12,
+            point_gap: 4,
+            corner_radius: 20.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaveConfig {
+    pub points: usize,
+    pub point_width: u32,
+    pub point_gap: u32,
+    pub thickness: u32,
+}
+
+impl Default for WaveConfig {
+    fn default() -> Self {
+        Self {
+            points: 30,
+            point_width: 12,
+            point_gap: 20,
+            thickness: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppConfig {
+    pub logging: bool,
     pub overlay: OverlayConfig,
     pub visualizer: VisualizerConfig,
+    pub bar: BarConfig,
+    pub wave: WaveConfig,
     pub daemon: DaemonConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            logging: false,
+            overlay: OverlayConfig::default(),
+            visualizer: VisualizerConfig::default(),
+            bar: BarConfig::default(),
+            wave: WaveConfig::default(),
+            daemon: DaemonConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DaemonConfig {
-    pub enabled: bool,
     pub poll_interval_ms: u64,
     pub activity_threshold: f32,
     pub activate_delay_ms: u64,
@@ -276,24 +294,19 @@ pub struct DaemonConfig {
     pub notify_on_error: bool,
     pub notify_cooldown_seconds: u64,
     pub allowed_processes: Vec<String>,
-    pub overlay_command: String,
-    pub overlay_args: Vec<String>,
 }
 
 impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            poll_interval_ms: 90,
+            poll_interval_ms: 500,
             activity_threshold: 0.035,
-            activate_delay_ms: 180,
-            deactivate_delay_ms: 2200,
+            activate_delay_ms: 0,
+            deactivate_delay_ms: 10,
             stop_on_silence: true,
             notify_on_error: true,
-            notify_cooldown_seconds: 45,
-            allowed_processes: Vec::new(),
-            overlay_command: "cavaii".to_owned(),
-            overlay_args: Vec::new(),
+            notify_cooldown_seconds: 120,
+            allowed_processes: vec!["spotify".to_owned(), "firefox".to_owned()],
         }
     }
 }
@@ -330,19 +343,35 @@ impl Error for ConfigLoadError {
 }
 
 pub fn default_config_path() -> PathBuf {
-    if let Ok(override_path) = env::var("CAVAII_CONFIG") {
-        return PathBuf::from(override_path);
-    }
-
-    if let Ok(config_home) = env::var("XDG_CONFIG_HOME") {
-        return PathBuf::from(config_home).join("cavaii/config.toml");
-    }
-
     if let Ok(home) = env::var("HOME") {
         return PathBuf::from(home).join(".config/cavaii/config.toml");
     }
 
-    PathBuf::from("cavaii.toml")
+    PathBuf::from(".config/cavaii/config.toml")
+}
+
+fn fixed_config_dir() -> Result<PathBuf, ConfigLoadError> {
+    let home = env::var("HOME").map_err(|_| {
+        ConfigLoadError::Parse("HOME is not set; cannot resolve ~/.config/cavaii".to_owned())
+    })?;
+    Ok(PathBuf::from(home).join(".config/cavaii"))
+}
+
+pub fn ensure_default_config_files() -> Result<PathBuf, ConfigLoadError> {
+    let config_dir = fixed_config_dir()?;
+    fs::create_dir_all(&config_dir).map_err(ConfigLoadError::Io)?;
+
+    let config_path = config_dir.join("config.toml");
+    let colors_path = config_dir.join("colors.toml");
+
+    if !config_path.exists() {
+        fs::write(&config_path, DEFAULT_CONFIG_TEMPLATE).map_err(ConfigLoadError::Io)?;
+    }
+    if !colors_path.exists() {
+        fs::write(&colors_path, DEFAULT_COLORS_TEMPLATE).map_err(ConfigLoadError::Io)?;
+    }
+
+    Ok(config_path)
 }
 
 pub fn default_colors_path(config_path: &Path) -> PathBuf {
@@ -438,6 +467,10 @@ fn parse_config(raw: &str) -> Result<AppConfig, ConfigLoadError> {
                 .map_err(|err| with_line_context(err, line_no))?,
             Some("visualizer") => parse_visualizer_key(&mut config.visualizer, key, &value)
                 .map_err(|err| with_line_context(err, line_no))?,
+            Some("bar") => parse_bar_key(&mut config.bar, key, &value)
+                .map_err(|err| with_line_context(err, line_no))?,
+            Some("wave") => parse_wave_key(&mut config.wave, key, &value)
+                .map_err(|err| with_line_context(err, line_no))?,
             Some("daemon") => parse_daemon_key(&mut config.daemon, key, &value)
                 .map_err(|err| with_line_context(err, line_no))?,
             Some(other) => {
@@ -445,15 +478,13 @@ fn parse_config(raw: &str) -> Result<AppConfig, ConfigLoadError> {
                     "line {line_no}: unknown section [{other}]"
                 )));
             }
-            None => {
-                return Err(ConfigLoadError::Parse(format!(
-                    "line {line_no}: key/value before a section header"
-                )));
-            }
+            None => parse_root_key(&mut config, key, &value)
+                .map_err(|err| with_line_context(err, line_no))?,
         }
         line_idx += 1;
     }
 
+    sync_visualizer_layout_from_type(&mut config);
     Ok(config)
 }
 
@@ -549,7 +580,6 @@ fn parse_overlay_key(
     value: &str,
 ) -> Result<(), ConfigLoadError> {
     match key {
-        "layer" => overlay.layer = OverlayLayer::parse(value)?,
         "anchor_margin" => overlay.anchor_margin = parse_u32(key, value)?,
         "width" => overlay.width = parse_u32(key, value)?,
         "height" => overlay.height = parse_u32(key, value)?,
@@ -570,20 +600,8 @@ fn parse_visualizer_key(
     match key {
         "backend" => visualizer.backend = VisualizerBackend::parse(value)?,
         "type" => visualizer.visualizer_type = VisualizerType::parse(value)?,
-        "bars" => visualizer.bars = parse_usize(key, value)?,
-        "bar_width" => visualizer.bar_width = parse_u32(key, value)?,
-        "bar_corner_radius" => {
-            visualizer.bar_corner_radius = parse_f32(key, value)?.max(0.0);
-        }
-        "wave_thickness" => visualizer.wave_thickness = parse_u32(key, value)?.max(1),
-        "gap" => visualizer.gap = parse_u32(key, value)?,
         "framerate" => visualizer.framerate = parse_u32(key, value)?,
         "gpu" => visualizer.gpu = parse_bool(key, value)?,
-        "pipewire_attack" => visualizer.pipewire_attack = parse_f32(key, value)?,
-        "pipewire_decay" => visualizer.pipewire_decay = parse_f32(key, value)?,
-        "pipewire_gain" => visualizer.pipewire_gain = parse_f32(key, value)?,
-        "pipewire_curve" => visualizer.pipewire_curve = parse_f32(key, value)?,
-        "pipewire_neighbor_mix" => visualizer.pipewire_neighbor_mix = parse_f32(key, value)?,
         _ => {
             return Err(ConfigLoadError::Parse(format!(
                 "unknown visualizer key: {key}"
@@ -593,13 +611,52 @@ fn parse_visualizer_key(
     Ok(())
 }
 
+fn parse_bar_key(bar: &mut BarConfig, key: &str, value: &str) -> Result<(), ConfigLoadError> {
+    match key {
+        "points" => bar.points = parse_usize(key, value)?.max(1),
+        "point_width" => bar.point_width = parse_u32(key, value)?.max(1),
+        "point_gap" => bar.point_gap = parse_u32(key, value)?,
+        "corner_radius" => bar.corner_radius = parse_f32(key, value)?.max(0.0),
+        _ => return Err(ConfigLoadError::Parse(format!("unknown bar key: {key}"))),
+    }
+    Ok(())
+}
+
+fn parse_wave_key(wave: &mut WaveConfig, key: &str, value: &str) -> Result<(), ConfigLoadError> {
+    match key {
+        "points" => wave.points = parse_usize(key, value)?.max(1),
+        "point_width" => wave.point_width = parse_u32(key, value)?.max(1),
+        "point_gap" => wave.point_gap = parse_u32(key, value)?,
+        "thickness" => wave.thickness = parse_u32(key, value)?.max(1),
+        _ => return Err(ConfigLoadError::Parse(format!("unknown wave key: {key}"))),
+    }
+    Ok(())
+}
+
+fn sync_visualizer_layout_from_type(config: &mut AppConfig) {
+    let (points, point_width, point_gap) = match config.visualizer.visualizer_type {
+        VisualizerType::Bars => (
+            config.bar.points,
+            config.bar.point_width,
+            config.bar.point_gap,
+        ),
+        VisualizerType::Wave => (
+            config.wave.points,
+            config.wave.point_width,
+            config.wave.point_gap,
+        ),
+    };
+    config.visualizer.points = points.max(1);
+    config.visualizer.point_width = point_width.max(1);
+    config.visualizer.point_gap = point_gap;
+}
+
 fn parse_daemon_key(
     daemon: &mut DaemonConfig,
     key: &str,
     value: &str,
 ) -> Result<(), ConfigLoadError> {
     match key {
-        "enabled" => daemon.enabled = parse_bool(key, value)?,
         "poll_interval_ms" => daemon.poll_interval_ms = parse_u64(key, value)?.max(16),
         "activity_threshold" => daemon.activity_threshold = parse_f32(key, value)?.clamp(0.0, 1.0),
         "activate_delay_ms" => daemon.activate_delay_ms = parse_u64(key, value)?,
@@ -608,17 +665,20 @@ fn parse_daemon_key(
         "notify_on_error" => daemon.notify_on_error = parse_bool(key, value)?,
         "notify_cooldown_seconds" => daemon.notify_cooldown_seconds = parse_u64(key, value)?,
         "allowed_processes" => daemon.allowed_processes = parse_string_list(value),
-        "overlay_command" => {
-            let command = parse_optional_string(value).unwrap_or_default();
-            daemon.overlay_command = if command.is_empty() {
-                DaemonConfig::default().overlay_command
-            } else {
-                command
-            };
-        }
-        "overlay_args" => daemon.overlay_args = parse_string_list(value),
         _ => {
             return Err(ConfigLoadError::Parse(format!("unknown daemon key: {key}")));
+        }
+    }
+    Ok(())
+}
+
+fn parse_root_key(config: &mut AppConfig, key: &str, value: &str) -> Result<(), ConfigLoadError> {
+    match key {
+        "logging" => config.logging = parse_bool(key, value)?,
+        _ => {
+            return Err(ConfigLoadError::Parse(
+                "key/value before a section header".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -664,15 +724,6 @@ fn with_line_context(error: ConfigLoadError, line_no: usize) -> ConfigLoadError 
             ConfigLoadError::Parse(format!("line {line_no}: {message}"))
         }
         other => other,
-    }
-}
-
-fn parse_optional_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
     }
 }
 
@@ -856,15 +907,16 @@ fn normalize_value(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppConfig, ColorOrientation, DaemonConfig, OverlayLayer, VisualizerBackend, VisualizerType,
+        AppConfig, ColorOrientation, DaemonConfig, VisualizerBackend, VisualizerType,
         apply_color_overrides, parse_color_overrides, parse_config,
     };
 
     #[test]
     fn parses_valid_config() {
         let raw = r#"
+        logging = false
+
         [overlay]
-        layer = "top"
         anchor_margin = 12
         width = 1200
         height = 140
@@ -872,21 +924,22 @@ mod tests {
         [visualizer]
         backend = "dummy"
         type = "wave"
-        bars = 64
-        bar_width = 5
-        bar_corner_radius = 6
-        wave_thickness = 4
-        gap = 2
         framerate = 75
         gpu = "disabled"
-        pipewire_attack = 0.2
-        pipewire_decay = 0.9
-        pipewire_gain = 1.5
-        pipewire_curve = 0.8
-        pipewire_neighbor_mix = 0.3
+
+        [bar]
+        points = 80
+        point_width = 6
+        point_gap = 3
+        corner_radius = 6
+
+        [wave]
+        points = 64
+        point_width = 5
+        point_gap = 2
+        thickness = 4
 
         [daemon]
-        enabled = true
         poll_interval_ms = 50
         activity_threshold = 0.045
         activate_delay_ms = 120
@@ -895,43 +948,41 @@ mod tests {
         notify_on_error = true
         notify_cooldown_seconds = 30
         allowed_processes = ["spotify", "vlc"]
-        overlay_command = "cargo"
-        overlay_args = ["run", "-p", "cavaii"]
         "#;
 
         let parsed = match parse_config(raw) {
             Ok(value) => value,
             Err(err) => panic!("valid config should parse, got error: {err}"),
         };
-        assert_eq!(parsed.overlay.layer, OverlayLayer::Top);
         assert_eq!(parsed.overlay.anchor_margin, 12);
         assert_eq!(parsed.overlay.width, 1200);
         assert_eq!(parsed.overlay.height, 140);
         assert_eq!(parsed.visualizer.backend, VisualizerBackend::Dummy);
         assert_eq!(parsed.visualizer.visualizer_type, VisualizerType::Wave);
-        assert_eq!(parsed.visualizer.bars, 64);
-        assert_eq!(parsed.visualizer.bar_width, 5);
-        assert!((parsed.visualizer.bar_corner_radius - 6.0).abs() < 1e-5);
-        assert_eq!(parsed.visualizer.wave_thickness, 4);
+        assert_eq!(parsed.visualizer.points, 64);
+        assert_eq!(parsed.visualizer.point_width, 5);
+        assert_eq!(parsed.bar.points, 80);
+        assert_eq!(parsed.bar.point_width, 6);
+        assert_eq!(parsed.bar.point_gap, 3);
+        assert!((parsed.bar.corner_radius - 6.0).abs() < 1e-5);
+        assert_eq!(parsed.wave.points, 64);
+        assert_eq!(parsed.wave.point_width, 5);
+        assert_eq!(parsed.wave.point_gap, 2);
+        assert_eq!(parsed.wave.thickness, 4);
         assert_eq!(
             parsed.visualizer.color_orientation,
-            ColorOrientation::Vertical
+            ColorOrientation::Horizontal
         );
         assert!(parsed.visualizer.color_fade);
-        assert_eq!(parsed.visualizer.gap, 2);
+        assert_eq!(parsed.visualizer.point_gap, 2);
         assert_eq!(parsed.visualizer.framerate, 75);
         assert_eq!(parsed.visualizer.color_gradient.len(), 1);
         assert!((parsed.visualizer.color_gradient[0].r - (175.0 / 255.0)).abs() < 1e-5);
         assert!(!parsed.visualizer.gpu);
-        assert_eq!(parsed.visualizer.pipewire_attack, 0.2);
-        assert_eq!(parsed.visualizer.pipewire_decay, 0.9);
-        assert_eq!(parsed.visualizer.pipewire_gain, 1.5);
-        assert_eq!(parsed.visualizer.pipewire_curve, 0.8);
-        assert_eq!(parsed.visualizer.pipewire_neighbor_mix, 0.3);
+        assert!(!parsed.logging);
         assert_eq!(
             parsed.daemon,
             DaemonConfig {
-                enabled: true,
                 poll_interval_ms: 50,
                 activity_threshold: 0.045,
                 activate_delay_ms: 120,
@@ -940,8 +991,6 @@ mod tests {
                 notify_on_error: true,
                 notify_cooldown_seconds: 30,
                 allowed_processes: vec!["spotify".to_owned(), "vlc".to_owned()],
-                overlay_command: "cargo".to_owned(),
-                overlay_args: vec!["run".to_owned(), "-p".to_owned(), "cavaii".to_owned()],
             }
         );
     }
@@ -959,20 +1008,25 @@ mod tests {
     fn built_in_defaults_match_expected_no_config_setup() {
         let config = AppConfig::default();
 
-        assert_eq!(config.overlay.layer, OverlayLayer::Background);
         assert_eq!(config.overlay.anchor_margin, 10);
-        assert_eq!(config.overlay.width, 1000);
-        assert_eq!(config.overlay.height, 300);
+        assert_eq!(config.overlay.width, 800);
+        assert_eq!(config.overlay.height, 100);
 
-        assert_eq!(config.visualizer.backend, VisualizerBackend::Pipewire);
-        assert_eq!(config.visualizer.visualizer_type, VisualizerType::Bar);
-        assert_eq!(config.visualizer.bars, 120);
-        assert_eq!(config.visualizer.bar_width, 12);
-        assert!((config.visualizer.bar_corner_radius - 20.0).abs() < 1e-5);
-        assert_eq!(config.visualizer.wave_thickness, 2);
+        assert_eq!(config.visualizer.backend, VisualizerBackend::Cava);
+        assert_eq!(config.visualizer.visualizer_type, VisualizerType::Bars);
+        assert_eq!(config.visualizer.points, 140);
+        assert_eq!(config.visualizer.point_width, 12);
+        assert_eq!(config.bar.points, 140);
+        assert_eq!(config.bar.point_width, 12);
+        assert_eq!(config.bar.point_gap, 4);
+        assert!((config.bar.corner_radius - 20.0).abs() < 1e-5);
+        assert_eq!(config.wave.points, 30);
+        assert_eq!(config.wave.point_width, 12);
+        assert_eq!(config.wave.point_gap, 20);
+        assert_eq!(config.wave.thickness, 4);
         assert!(config.visualizer.color_fade);
-        assert_eq!(config.visualizer.gap, 5);
-        assert_eq!(config.visualizer.framerate, 60);
+        assert_eq!(config.visualizer.point_gap, 4);
+        assert_eq!(config.visualizer.framerate, 30);
         assert_eq!(config.visualizer.color_gradient.len(), 1);
         assert!((config.visualizer.color_gradient[0].r - (175.0 / 255.0)).abs() < 1e-5);
         assert!((config.visualizer.color_gradient[0].g - (198.0 / 255.0)).abs() < 1e-5);
@@ -980,21 +1034,22 @@ mod tests {
         assert!((config.visualizer.color_gradient[0].a - 0.7).abs() < 1e-5);
         assert_eq!(
             config.visualizer.color_orientation,
-            ColorOrientation::Vertical
+            ColorOrientation::Horizontal
         );
         assert!(config.visualizer.gpu);
+        assert!(!config.logging);
 
-        assert!(config.daemon.enabled);
-        assert_eq!(config.daemon.poll_interval_ms, 90);
+        assert_eq!(config.daemon.poll_interval_ms, 500);
         assert!((config.daemon.activity_threshold - 0.035).abs() < 1e-5);
-        assert_eq!(config.daemon.activate_delay_ms, 180);
-        assert_eq!(config.daemon.deactivate_delay_ms, 2200);
+        assert_eq!(config.daemon.activate_delay_ms, 0);
+        assert_eq!(config.daemon.deactivate_delay_ms, 10);
         assert!(config.daemon.stop_on_silence);
         assert!(config.daemon.notify_on_error);
-        assert_eq!(config.daemon.notify_cooldown_seconds, 45);
-        assert!(config.daemon.allowed_processes.is_empty());
-        assert_eq!(config.daemon.overlay_command, "cavaii");
-        assert!(config.daemon.overlay_args.is_empty());
+        assert_eq!(config.daemon.notify_cooldown_seconds, 120);
+        assert_eq!(
+            config.daemon.allowed_processes,
+            vec!["spotify".to_owned(), "firefox".to_owned()]
+        );
     }
 
     #[test]
@@ -1010,6 +1065,140 @@ mod tests {
         };
         let message = err.to_string();
         assert!(message.contains("unknown visualizer key: fade"));
+    }
+
+    #[test]
+    fn rejects_legacy_visualizer_keys_and_values() {
+        let raw = r#"
+        [visualizer]
+        type = "bar"
+        bars = 120
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with legacy visualizer keys should fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(message.contains("unknown visualizer.type value: bar"));
+    }
+
+    #[test]
+    fn rejects_visualizer_layout_keys_in_visualizer_section() {
+        let raw = r#"
+        [visualizer]
+        points = 120
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with visualizer.points should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown visualizer key: points"));
+    }
+
+    #[test]
+    fn rejects_removed_overlay_layer_key() {
+        let raw = r#"
+        [overlay]
+        layer = "background"
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed overlay.layer should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown overlay key: layer"));
+    }
+
+    #[test]
+    fn rejects_removed_daemon_keys() {
+        let raw = r#"
+        [daemon]
+        enabled = true
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed daemon.enabled should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown daemon key: enabled"));
+    }
+
+    #[test]
+    fn rejects_removed_daemon_logging_key() {
+        let raw = r#"
+        [daemon]
+        logging = true
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed daemon.logging should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown daemon key: logging"));
+    }
+
+    #[test]
+    fn rejects_removed_backend_values() {
+        let raw = r#"
+        [visualizer]
+        backend = "pipewire"
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed backend should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown visualizer.backend value: pipewire")
+        );
+
+        let raw = r#"
+        [visualizer]
+        backend = "auto"
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed backend should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown visualizer.backend value: auto")
+        );
+    }
+
+    #[test]
+    fn rejects_removed_pipewire_tuning_keys() {
+        let raw = r#"
+        [visualizer]
+        pipewire_gain = 1.25
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed PipeWire tuning should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown visualizer key: pipewire_gain")
+        );
+    }
+
+    #[test]
+    fn rejects_removed_logging_section() {
+        let raw = r#"
+        [logging]
+        level = "debug"
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed logging section should fail"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("unknown section [logging]"));
     }
 
     #[test]
@@ -1103,5 +1292,22 @@ mod tests {
         assert!((config.visualizer.color_gradient[0].g - (122.0 / 255.0)).abs() < 1e-5);
         assert!((config.visualizer.color_gradient[0].b - (99.0 / 255.0)).abs() < 1e-5);
         assert!((config.visualizer.color_gradient[0].a - 0.9).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rejects_legacy_vertical_spread_orientation_value() {
+        let raw = r#"
+        [color]
+        orientation = "vertical-spread"
+        "#;
+
+        let err = match parse_color_overrides(raw) {
+            Ok(_) => panic!("legacy orientation value should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown color.orientation value: vertical-spread")
+        );
     }
 }

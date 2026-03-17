@@ -1,4 +1,4 @@
-use cavaii_common::config::{AppConfig, OverlayConfig, OverlayLayer};
+use cavaii_common::config::{AppConfig, OverlayConfig};
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -45,11 +45,7 @@ pub fn configure_layer_shell(
     window.init_layer_shell();
     window.set_monitor(monitor);
     window.set_namespace(Some("cavaii"));
-    window.set_layer(match overlay.layer {
-        OverlayLayer::Background => Layer::Background,
-        OverlayLayer::Bottom => Layer::Bottom,
-        OverlayLayer::Top => Layer::Top,
-    });
+    window.set_layer(Layer::Background);
     window.set_keyboard_mode(KeyboardMode::None);
     window.set_exclusive_zone(0);
 

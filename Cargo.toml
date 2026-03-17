@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/common", "crates/daemon", "crates/engine", "crates/overlay"]
-default-members = ["crates/daemon", "crates/overlay"]
+default-members = ["crates/daemon", "crates/engine", "crates/overlay"]
 resolver = "2"
 
 [workspace.package]

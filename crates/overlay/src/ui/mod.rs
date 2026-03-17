@@ -13,14 +13,12 @@ use cavaii_common::config::{
 use cavaii_engine::live::LiveFrameStream;
 use gtk::glib;
 use gtk::prelude::*;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::ui::gpu_widget::BarsWidget;
 
 pub fn spawn_frame_stream(config: &AppConfig) -> Rc<LiveFrameStream> {
-    let stream = Rc::new(LiveFrameStream::spawn(config.visualizer.clone()));
-    info!("cavaii: using {:?} frame source", stream.source_kind());
-    stream
+    Rc::new(LiveFrameStream::spawn(config.visualizer.clone()))
 }
 
 pub fn build_overlay_windows(
@@ -57,7 +55,7 @@ fn build_overlay_window(
     window.set_resizable(false);
     window.set_focusable(false);
 
-    let bar_count = config.visualizer.bars.max(1);
+    let bar_count = config.visualizer.points.max(1);
     let bar_values = Rc::new(RefCell::new(vec![0.0_f64; bar_count]));
     let (widget, render_target) = if config.visualizer.gpu {
         let bars_widget = build_gpu_widget(config, Rc::clone(&bar_values));
@@ -88,10 +86,10 @@ fn build_cpu_area(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> gtk:
     drawing_area.set_can_target(false);
     drawing_area.set_size_request(to_i32(config.overlay.width), overlay_draw_height(config));
 
-    let bar_width = f64::from(config.visualizer.bar_width.max(1));
-    let bar_corner_radius = f64::from(config.visualizer.bar_corner_radius.max(0.0));
-    let wave_thickness = f64::from(config.visualizer.wave_thickness.max(1));
-    let gap = f64::from(config.visualizer.gap);
+    let point_width = f64::from(config.visualizer.point_width.max(1));
+    let point_corner_radius = f64::from(config.bar.corner_radius.max(0.0));
+    let wave_thickness = f64::from(config.wave.thickness.max(1));
+    let point_gap = f64::from(config.visualizer.point_gap);
     let gradient = resolve_gradient(&config.visualizer);
     let orientation = config.visualizer.color_orientation;
     let visualizer_type = config.visualizer.visualizer_type;
@@ -130,9 +128,47 @@ fn build_cpu_area(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> gtk:
         }
 
         let mut layout = layout_for_draw.borrow_mut();
-        layout.update(width, values.len(), bar_width, gap);
+        layout.update(width, values.len(), point_width, point_gap);
 
-        set_paint_source(ctx, width, height, &gradient, orientation, fade);
+        let effective_orientation = effective_fade_orientation(orientation, fade);
+        if effective_orientation == ColorOrientation::Height {
+            let width_f = f64::from(width.max(1));
+            let height_f = f64::from(height.max(1));
+            for (index, value) in values.iter().enumerate() {
+                let bar_height = (height_f * value.clamp(0.0, 1.0)).max(1.0);
+                let x = layout.start_x + (index as f64 * layout.step);
+                let y = height_f - bar_height;
+                let center_x = x + (layout.scaled_width * 0.5);
+                let center_y = y + (bar_height * 0.5);
+                let gradient_t = ((height_f - center_y) / height_f).clamp(0.0, 1.0);
+                let mut color = gradient_color_at(&gradient, gradient_t);
+                if fade {
+                    let edge = (center_x / width_f).clamp(0.0, 1.0);
+                    color.a *= fade_factor(edge) as f32;
+                }
+                ctx.set_source_rgba(
+                    f64::from(color.r),
+                    f64::from(color.g),
+                    f64::from(color.b),
+                    f64::from(color.a),
+                );
+                append_rounded_rect(
+                    ctx,
+                    x,
+                    y,
+                    layout.scaled_width,
+                    bar_height,
+                    point_corner_radius,
+                );
+                if ctx.fill().is_err() {
+                    error!("cavaii: cairo fill failed");
+                    break;
+                }
+            }
+            return;
+        }
+
+        set_paint_source(ctx, width, height, &gradient, effective_orientation, fade);
         let height_f = f64::from(height);
         for (index, value) in values.iter().enumerate() {
             let bar_height = (height_f * value.clamp(0.0, 1.0)).max(1.0);
@@ -144,7 +180,7 @@ fn build_cpu_area(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> gtk:
                 y,
                 layout.scaled_width,
                 bar_height,
-                bar_corner_radius,
+                point_corner_radius,
             );
         }
 
@@ -157,16 +193,16 @@ fn build_cpu_area(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> gtk:
 }
 
 fn build_gpu_widget(config: &AppConfig, bar_values: Rc<RefCell<Vec<f64>>>) -> BarsWidget {
-    let bar_width = f64::from(config.visualizer.bar_width.max(1));
-    let bar_corner_radius = f64::from(config.visualizer.bar_corner_radius.max(0.0));
-    let wave_thickness = f64::from(config.visualizer.wave_thickness.max(1));
-    let gap = f64::from(config.visualizer.gap);
+    let point_width = f64::from(config.visualizer.point_width.max(1));
+    let point_corner_radius = f64::from(config.bar.corner_radius.max(0.0));
+    let wave_thickness = f64::from(config.wave.thickness.max(1));
+    let point_gap = f64::from(config.visualizer.point_gap);
     let gradient = resolve_gradient(&config.visualizer);
     let widget = BarsWidget::new(
         bar_values,
-        bar_width,
-        gap,
-        bar_corner_radius,
+        point_width,
+        point_gap,
+        point_corner_radius,
         wave_thickness,
         config.visualizer.visualizer_type,
         config.visualizer.color_fade,
@@ -366,8 +402,7 @@ pub(super) fn overlay_draw_height(config: &AppConfig) -> i32 {
         return base_height;
     }
 
-    let wave_padding =
-        wave_stroke_padding(f64::from(config.visualizer.wave_thickness.max(1))).ceil() as i32;
+    let wave_padding = wave_stroke_padding(f64::from(config.wave.thickness.max(1))).ceil() as i32;
     base_height.saturating_add(wave_padding.saturating_mul(2))
 }
 
@@ -501,6 +536,7 @@ fn set_paint_source(
 
     let width_f = f64::from(width.max(1));
     let height_f = f64::from(height.max(1));
+    let orientation = effective_fade_orientation(orientation, fade);
     let (x0, y0, x1, y1) = gradient_axis(width_f, height_f, orientation);
     let gradient_paint = gtk::cairo::LinearGradient::new(x0, y0, x1, y1);
     for (pos, color) in build_gradient_stops(&resolved, fade) {
@@ -515,10 +551,18 @@ fn set_paint_source(
     let _ = ctx.set_source(&gradient_paint);
 }
 
+fn effective_fade_orientation(orientation: ColorOrientation, fade: bool) -> ColorOrientation {
+    if fade {
+        ColorOrientation::Horizontal
+    } else {
+        orientation
+    }
+}
+
 fn gradient_axis(width: f64, height: f64, orientation: ColorOrientation) -> (f64, f64, f64, f64) {
     match orientation {
         ColorOrientation::Horizontal => (0.0, 0.0, width.max(1.0), 0.0),
-        ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),
+        ColorOrientation::Height | ColorOrientation::Vertical => (0.0, height.max(1.0), 0.0, 0.0),
     }
 }
 
@@ -723,7 +767,8 @@ fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{interpolate_wave_values, wave_source_span_millis};
+    use super::{effective_fade_orientation, interpolate_wave_values, wave_source_span_millis};
+    use cavaii_common::config::ColorOrientation;
 
     #[test]
     fn wave_span_uses_frame_delta_when_available() {
@@ -768,5 +813,21 @@ mod tests {
             &mut output,
         );
         assert!((output[0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fade_orientation_is_always_horizontal_when_enabled() {
+        assert_eq!(
+            effective_fade_orientation(ColorOrientation::Height, true),
+            ColorOrientation::Horizontal
+        );
+        assert_eq!(
+            effective_fade_orientation(ColorOrientation::Horizontal, true),
+            ColorOrientation::Horizontal
+        );
+        assert_eq!(
+            effective_fade_orientation(ColorOrientation::Height, false),
+            ColorOrientation::Height
+        );
     }
 }

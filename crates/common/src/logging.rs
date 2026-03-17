@@ -38,15 +38,25 @@ impl Display for LoggingInitError {
 
 impl Error for LoggingInitError {}
 
-#[derive(Clone, Copy, Debug)]
-struct HumanTime;
+#[derive(Clone, Debug)]
+struct HumanTime {
+    process_name: String,
+}
+
+impl HumanTime {
+    fn new(process_name: &str) -> Self {
+        Self {
+            process_name: process_name.to_owned(),
+        }
+    }
+}
 
 impl FormatTime for HumanTime {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
         let now = OffsetDateTime::now_utc().to_offset(local_offset());
         match now.format(LOG_TIME_FORMAT) {
-            Ok(value) => w.write_str(&value),
-            Err(_) => w.write_str("0000-00-00 00:00:00"),
+            Ok(value) => write!(w, "{value} [{}]", self.process_name),
+            Err(_) => write!(w, "0000-00-00 00:00:00 [{}]", self.process_name),
         }
     }
 }
@@ -67,12 +77,13 @@ fn setup_subscriber(process_name: &str) -> Result<(), Box<dyn Error>> {
 
     let env_filter = EnvFilter::try_new(log_filter).unwrap_or_else(|_| EnvFilter::new("info"));
 
+    let timer = HumanTime::new(process_name);
     let stderr_layer = tracing_subscriber::fmt::layer()
-        .with_timer(HumanTime)
+        .with_timer(timer.clone())
         .with_target(false)
         .with_writer(std::io::stderr);
 
-    let (file_writer, file_guard) = match build_file_writer(process_name) {
+    let (file_writer, file_guard) = match build_file_writer() {
         Ok(Some(value)) => (Some(value.0), Some(value.1)),
         Ok(None) => (None, None),
         Err(err) => {
@@ -95,7 +106,7 @@ fn setup_subscriber(process_name: &str) -> Result<(), Box<dyn Error>> {
     if let Some(file_writer) = file_writer {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_ansi(false)
-            .with_timer(HumanTime)
+            .with_timer(timer)
             .with_target(false)
             .with_writer(file_writer);
         subscriber.with(file_layer).try_init()?;
@@ -113,10 +124,8 @@ fn local_offset() -> UtcOffset {
         .unwrap_or(&UtcOffset::UTC)
 }
 
-fn build_file_writer(
-    process_name: &str,
-) -> Result<Option<(NonBlocking, WorkerGuard)>, std::io::Error> {
-    let path = default_log_path(process_name);
+fn build_file_writer() -> Result<Option<(NonBlocking, WorkerGuard)>, std::io::Error> {
+    let path = default_log_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -126,25 +135,10 @@ fn build_file_writer(
     Ok(Some(output))
 }
 
-fn default_log_path(process_name: &str) -> PathBuf {
-    if let Ok(path) = env::var("CAVAII_LOG_FILE") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    if let Ok(state_home) = env::var("XDG_STATE_HOME") {
-        return PathBuf::from(state_home)
-            .join("cavaii")
-            .join(format!("{process_name}.log"));
-    }
-
+fn default_log_path() -> PathBuf {
     if let Ok(home) = env::var("HOME") {
-        return PathBuf::from(home)
-            .join(".local/state/cavaii")
-            .join(format!("{process_name}.log"));
+        return PathBuf::from(home).join(".local/state/cavaii.log");
     }
 
-    PathBuf::from(format!("cavaii-{process_name}.log"))
+    PathBuf::from(".local/state/cavaii.log")
 }
