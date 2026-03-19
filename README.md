@@ -77,7 +77,6 @@ Under [themes](./assets/themes/) there are bundled color presets.
 
 `[daemon]`
 - `poll_interval_ms = 500`
-- `activity_threshold = 0.035`
 - `activate_delay_ms = 0`
 - `deactivate_delay_ms = 10`
 - `stop_on_silence = true`
@@ -85,6 +84,7 @@ Under [themes](./assets/themes/) there are bundled color presets.
 - `notify_cooldown_seconds = 120`
 - `allowed_processes = ["spotify", "firefox"]`
 
+Daemon activity uses playback presence plus `allowed_processes` filtering (no audio threshold).
 
 ### `colors.toml`
 

@@ -8,9 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use activity::{ActivityState, ActivityTracker};
-use cavaii_common::config::{self, DaemonConfig, VisualizerConfig};
+use cavaii_common::config::{self, DaemonConfig};
 use cavaii_common::notify::notify_error_with_cooldown;
-use cavaii_engine::live::LiveFrameStream;
 use process::OverlayProcess;
 use tracing::{error, info, warn};
 
@@ -42,7 +41,6 @@ impl Error for DaemonError {
 
 #[derive(Clone, Debug, PartialEq)]
 struct RuntimeConfig {
-    visualizer: VisualizerConfig,
     daemon: DaemonConfig,
 }
 
@@ -103,7 +101,6 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
 
     let mut config_stamp = ConfigStamp::read(&active_config_path);
     let mut pending_config_reload: Option<PendingConfigReload> = None;
-    let mut stream = LiveFrameStream::spawn(runtime.visualizer.clone());
     let mut inactivity_grace_until: Option<Instant> = None;
 
     let mut activity = ActivityTracker::new();
@@ -165,10 +162,6 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
                             now,
                             config_switch_grace_duration(&runtime.daemon, &next_runtime.daemon),
                         );
-                        if audio_probe_config_changed(&runtime.visualizer, &next_runtime.visualizer)
-                        {
-                            stream = LiveFrameStream::spawn(next_runtime.visualizer.clone());
-                        }
                         runtime = next_runtime;
                     }
                 }
@@ -192,8 +185,8 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
             overlay.stop().map_err(DaemonError::Runtime)?;
         }
 
-        let peak = stream.latest_frame().peak;
-        let mut instantaneous_active = process_allowed && peak >= runtime.daemon.activity_threshold;
+        let playback_active = process::any_audio_playback_running();
+        let mut instantaneous_active = process_allowed && playback_active;
         if !instantaneous_active
             && activity.state() == ActivityState::Active
             && inactivity_grace_until.is_some_and(|until| now < until)
@@ -242,19 +235,12 @@ pub fn run(config_path: PathBuf) -> Result<(), DaemonError> {
 fn load_runtime_config(config_path: &Path) -> Result<RuntimeConfig, config::ConfigLoadError> {
     let app_config = config::load_or_default(config_path)?;
     Ok(RuntimeConfig {
-        visualizer: app_config.visualizer,
         daemon: app_config.daemon,
     })
 }
 
 fn notify_cooldown(config: &DaemonConfig) -> Duration {
     Duration::from_secs(config.notify_cooldown_seconds)
-}
-
-fn audio_probe_config_changed(current: &VisualizerConfig, next: &VisualizerConfig) -> bool {
-    current.backend != next.backend
-        || current.points != next.points
-        || current.framerate != next.framerate
 }
 
 fn config_switch_grace_duration(current: &DaemonConfig, next: &DaemonConfig) -> Duration {
@@ -295,40 +281,12 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
-    use cavaii_common::config::{DaemonConfig, VisualizerBackend, VisualizerConfig};
+    use cavaii_common::config::DaemonConfig;
 
     use super::{
         ActivityState, CONFIG_RELOAD_DEBOUNCE, ConfigStamp, PendingConfigReload,
-        audio_probe_config_changed, config_switch_grace_duration, extend_inactivity_grace,
+        config_switch_grace_duration, extend_inactivity_grace,
     };
-
-    #[test]
-    fn ignores_purely_visual_visualizer_changes() {
-        let current = VisualizerConfig::default();
-        let mut next = current.clone();
-        next.point_width = 42;
-        next.point_gap = 7;
-        next.color_gradient = vec![cavaii_common::config::RgbaColor::default()];
-        next.gpu = false;
-
-        assert!(!audio_probe_config_changed(&current, &next));
-    }
-
-    #[test]
-    fn detects_audio_probe_changes() {
-        let current = VisualizerConfig::default();
-        let mut next = current.clone();
-        next.backend = VisualizerBackend::Dummy;
-        assert!(audio_probe_config_changed(&current, &next));
-
-        let mut next = current.clone();
-        next.points += 8;
-        assert!(audio_probe_config_changed(&current, &next));
-
-        let mut next = current.clone();
-        next.framerate += 1;
-        assert!(audio_probe_config_changed(&current, &next));
-    }
 
     #[test]
     fn config_switch_grace_has_minimum_duration() {

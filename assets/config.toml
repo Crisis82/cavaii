@@ -25,7 +25,6 @@ thickness = 4
 
 [daemon]
 poll_interval_ms = 500
-activity_threshold = 0.035
 activate_delay_ms = 0
 deactivate_delay_ms = 10
 stop_on_silence = true

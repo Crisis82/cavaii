@@ -136,6 +136,98 @@ pub fn any_allowed_process_running(allowed: &[String]) -> bool {
     false
 }
 
+pub fn any_audio_playback_running() -> bool {
+    let output = match Command::new("pactl")
+        .arg("list")
+        .arg("sink-inputs")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+    {
+        Ok(value) => value,
+        Err(_) => return true,
+    };
+
+    if !output.status.success() {
+        return true;
+    }
+
+    playback_active_from_pactl_output(&output.stdout)
+}
+
+fn has_non_empty_line(bytes: &[u8]) -> bool {
+    if let Ok(raw) = std::str::from_utf8(bytes) {
+        return raw.lines().any(|line| !line.trim().is_empty());
+    }
+
+    bytes.iter().any(|value| !value.is_ascii_whitespace())
+}
+
+fn playback_active_from_pactl_output(bytes: &[u8]) -> bool {
+    let Ok(raw) = std::str::from_utf8(bytes) else {
+        return has_non_empty_line(bytes);
+    };
+
+    let mut saw_block = false;
+    let mut saw_state_or_cork = false;
+    let mut block_state: Option<String> = None;
+    let mut block_corked: Option<bool> = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if trimmed.starts_with("Sink Input #") {
+            if saw_block && sink_block_is_active(block_state.as_deref(), block_corked) {
+                return true;
+            }
+            saw_block = true;
+            block_state = None;
+            block_corked = None;
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("State:") {
+            saw_state_or_cork = true;
+            block_state = Some(value.trim().to_ascii_uppercase());
+            continue;
+        }
+
+        if let Some(value) = trimmed.strip_prefix("Corked:") {
+            let normalized = value.trim().to_ascii_lowercase();
+            saw_state_or_cork = true;
+            block_corked = match normalized.as_str() {
+                "yes" | "true" => Some(true),
+                "no" | "false" => Some(false),
+                _ => None,
+            };
+        }
+    }
+
+    if saw_block && sink_block_is_active(block_state.as_deref(), block_corked) {
+        return true;
+    }
+
+    if saw_block && !saw_state_or_cork {
+        // Unexpected format: keep behavior conservative and avoid false negatives.
+        return has_non_empty_line(bytes);
+    }
+
+    false
+}
+
+fn sink_block_is_active(state: Option<&str>, corked: Option<bool>) -> bool {
+    if matches!(state, Some("RUNNING")) {
+        return true;
+    }
+    if matches!(state, Some("IDLE" | "SUSPENDED")) {
+        return false;
+    }
+    matches!(corked, Some(false))
+}
+
 fn process_name_matches(proc_path: &Path, allowed: &HashSet<String>) -> bool {
     if let Ok(comm) = std::fs::read_to_string(proc_path.join("comm")) {
         let comm = comm.trim().to_ascii_lowercase();
@@ -165,4 +257,41 @@ fn process_name_matches(proc_path: &Path, allowed: &HashSet<String>) -> bool {
     }
 
     allowed.contains(&name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{has_non_empty_line, playback_active_from_pactl_output};
+
+    #[test]
+    fn detects_non_empty_pactl_output() {
+        assert!(!has_non_empty_line(b""));
+        assert!(!has_non_empty_line(b" \n\t "));
+        assert!(has_non_empty_line(b"42\t12\tpipewire\tfoo\n"));
+    }
+
+    #[test]
+    fn detects_running_sink_input_as_active() {
+        let raw = b"
+Sink Input #99
+        State: RUNNING
+        Corked: no
+";
+        assert!(playback_active_from_pactl_output(raw));
+    }
+
+    #[test]
+    fn detects_corked_or_idle_sink_input_as_inactive() {
+        let raw = b"
+Sink Input #99
+        State: IDLE
+        Corked: yes
+";
+        assert!(!playback_active_from_pactl_output(raw));
+    }
+
+    #[test]
+    fn returns_inactive_when_no_sink_inputs() {
+        assert!(!playback_active_from_pactl_output(b""));
+    }
 }

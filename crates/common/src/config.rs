@@ -287,7 +287,6 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DaemonConfig {
     pub poll_interval_ms: u64,
-    pub activity_threshold: f32,
     pub activate_delay_ms: u64,
     pub deactivate_delay_ms: u64,
     pub stop_on_silence: bool,
@@ -300,7 +299,6 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             poll_interval_ms: 500,
-            activity_threshold: 0.035,
             activate_delay_ms: 0,
             deactivate_delay_ms: 10,
             stop_on_silence: true,
@@ -658,7 +656,6 @@ fn parse_daemon_key(
 ) -> Result<(), ConfigLoadError> {
     match key {
         "poll_interval_ms" => daemon.poll_interval_ms = parse_u64(key, value)?.max(16),
-        "activity_threshold" => daemon.activity_threshold = parse_f32(key, value)?.clamp(0.0, 1.0),
         "activate_delay_ms" => daemon.activate_delay_ms = parse_u64(key, value)?,
         "deactivate_delay_ms" => daemon.deactivate_delay_ms = parse_u64(key, value)?,
         "stop_on_silence" => daemon.stop_on_silence = parse_bool(key, value)?,
@@ -941,7 +938,6 @@ mod tests {
 
         [daemon]
         poll_interval_ms = 50
-        activity_threshold = 0.045
         activate_delay_ms = 120
         deactivate_delay_ms = 1800
         stop_on_silence = false
@@ -984,7 +980,6 @@ mod tests {
             parsed.daemon,
             DaemonConfig {
                 poll_interval_ms: 50,
-                activity_threshold: 0.045,
                 activate_delay_ms: 120,
                 deactivate_delay_ms: 1800,
                 stop_on_silence: false,
@@ -1040,7 +1035,6 @@ mod tests {
         assert!(!config.logging);
 
         assert_eq!(config.daemon.poll_interval_ms, 500);
-        assert!((config.daemon.activity_threshold - 0.035).abs() < 1e-5);
         assert_eq!(config.daemon.activate_delay_ms, 0);
         assert_eq!(config.daemon.deactivate_delay_ms, 10);
         assert!(config.daemon.stop_on_silence);
@@ -1137,6 +1131,23 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("unknown daemon key: logging"));
+    }
+
+    #[test]
+    fn rejects_removed_daemon_activity_threshold_key() {
+        let raw = r#"
+        [daemon]
+        activity_threshold = 0.05
+        "#;
+
+        let err = match parse_config(raw) {
+            Ok(_) => panic!("config with removed daemon.activity_threshold should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("unknown daemon key: activity_threshold")
+        );
     }
 
     #[test]

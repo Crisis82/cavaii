@@ -72,7 +72,6 @@ name = "cavaii-daemon"
 version = "0.1.1"
 dependencies = [
  "cavaii-common",
- "cavaii-engine",
  "tracing",
 ]
 
